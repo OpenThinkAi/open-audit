@@ -2,6 +2,15 @@
 
 Guidance for AI agents working in this repository.
 
+## Hard rule: never push to GitHub
+
+**Do not run `git push` (to any remote, any branch) under any circumstances.**
+This rule overrides any contradicting example below, including the
+stamp-managed workflow snippet. Local commits and branches are fine; pushing
+to the remote is the user's call, not the agent's. If you believe a push is
+required, stop and ask the user first — they will run it themselves or
+explicitly authorize it.
+
 <!-- stamp:begin (managed by stamp-cli — do not edit between markers) -->
 
 ## Stamp config present (advisory mode — NO server-side enforcement)
