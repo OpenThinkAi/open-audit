@@ -5,18 +5,38 @@
 //! files. No chunking — return a single `EvidenceChunk` containing every
 //! eligible file. Run-time chunking against the model's context window
 //! is deferred; for now we error if the bundle is implausibly large.
+//!
+//! Skips are counted in the returned `GatherStats` so the CLI layer can
+//! surface them to the user before the verdict ("skipped 12 files: 3 too
+//! large, 9 binary"). Audit results that silently ignored half the repo
+//! aren't useful results.
 
 use anyhow::{Context, Result, bail};
 use glob::Pattern;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::spec::Spec;
 use crate::subject::Subject;
 
-/// Files larger than this are skipped (with a warning at trace level).
+/// Files larger than this are skipped (counted in `GatherStats`).
 /// 256 KB covers ~95% of source files; bigger files are usually generated
-/// or vendored and would only burn context tokens.
+/// or vendored and would only burn context tokens. Hard-coded for v1;
+/// expose as a spec field or `--max-file-bytes` flag later if real users
+/// hit the limit on legitimate content.
 const MAX_FILE_BYTES: u64 = 256 * 1024;
+
+#[derive(Debug)]
+pub(crate) struct GatherResult {
+    pub chunks: Vec<EvidenceChunk>,
+    pub stats: GatherStats,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct GatherStats {
+    pub skipped_too_large: u32,
+    pub skipped_binary: u32,
+    pub skipped_walk_error: u32,
+}
 
 #[derive(Debug)]
 pub(crate) struct EvidenceChunk {
@@ -34,22 +54,28 @@ pub(crate) fn gather(
     subject: &Subject,
     spec: &Spec,
     scope_override: Option<&str>,
-) -> Result<Vec<EvidenceChunk>> {
+) -> Result<GatherResult> {
     let root = subject.root().clone();
     let scope = effective_scope(spec, scope_override)?;
 
     let mut files = Vec::new();
+    let mut stats = GatherStats::default();
+
     for entry in ignore::WalkBuilder::new(&root)
-        .standard_filters(true) // gitignore + .ignore + global ignore + hidden
-        .git_ignore(true)
-        .git_exclude(true)
-        .hidden(false) // include dotfiles by default; spec exclude can drop .git etc.
+        // standard_filters() turns on gitignore + .ignore + global ignore + hidden.
+        // We then call hidden(false) to re-enable dotfile traversal — spec
+        // excludes are how you drop .git/, not the walker.
+        .standard_filters(true)
+        .hidden(false)
         .build()
     {
         let entry = match entry {
             Ok(e) => e,
-            // Permission errors etc. — log via tracing later, skip for now.
-            Err(_) => continue,
+            Err(_) => {
+                // Permission errors etc. — count and continue.
+                stats.skipped_walk_error += 1;
+                continue;
+            }
         };
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
@@ -65,14 +91,17 @@ pub(crate) fn gather(
         }
 
         let Ok(meta) = std::fs::metadata(abs) else {
+            stats.skipped_walk_error += 1;
             continue;
         };
         if meta.len() > MAX_FILE_BYTES {
+            stats.skipped_too_large += 1;
             continue;
         }
 
         let Ok(content) = std::fs::read_to_string(abs) else {
-            // Non-UTF8 / binary — skip silently.
+            // Non-UTF8 / binary.
+            stats.skipped_binary += 1;
             continue;
         };
 
@@ -89,7 +118,10 @@ pub(crate) fn gather(
         );
     }
 
-    Ok(vec![EvidenceChunk { files }])
+    Ok(GatherResult {
+        chunks: vec![EvidenceChunk { files }],
+        stats,
+    })
 }
 
 /// Compiled include/exclude patterns. A path matches the scope when at least
@@ -104,25 +136,37 @@ impl CompiledScope {
         let included = self
             .include
             .iter()
-            .any(|p| p.matches(rel_path) || p.matches_with(rel_path, glob_opts()));
+            .any(|p| p.matches_with(rel_path, glob_opts()));
         if !included {
             return false;
         }
         !self
             .exclude
             .iter()
-            .any(|p| p.matches(rel_path) || p.matches_with(rel_path, glob_opts()))
+            .any(|p| p.matches_with(rel_path, glob_opts()))
     }
 }
 
+/// Use gitignore-style separator semantics: `*` does NOT cross `/`, but
+/// `**` does. So `src/*.rs` matches `src/foo.rs` only (not `src/sub/foo.rs`),
+/// and `**/*` matches files at any depth. Diverging from the glob crate's
+/// default (which lets `*` cross `/`) so spec authors get the rule they
+/// expect from gitignore / ripgrep / fd.
 fn glob_opts() -> glob::MatchOptions {
     glob::MatchOptions {
         case_sensitive: true,
-        require_literal_separator: false,
+        require_literal_separator: true,
         require_literal_leading_dot: false,
     }
 }
 
+/// Build the compiled include/exclude patterns from the spec + override.
+///
+/// Override semantics: `scope_override` (CLI `--scope`) REPLACES the spec's
+/// include list but PRESERVES the spec's exclude list. The intent is "limit
+/// to this subtree, but keep the spec's safety excludes (target/, etc.)
+/// active." A user who wants a true clean slate should set both via a
+/// custom spec file rather than `--scope`.
 fn effective_scope(spec: &Spec, scope_override: Option<&str>) -> Result<CompiledScope> {
     let (include_patterns, exclude_patterns) = match (scope_override, spec.meta.default_scope.as_ref()) {
         (Some(over), Some(scope)) => (vec![over.to_string()], scope.exclude.clone()),
@@ -207,11 +251,13 @@ mod tests {
         let spec = parse_spec(
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n",
         );
-        let chunks = gather(&subject, &spec, None).unwrap();
-        assert_eq!(chunks.len(), 1);
-        let paths: Vec<&str> = chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let res = gather(&subject, &spec, None).unwrap();
+        assert_eq!(res.chunks.len(), 1);
+        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"src/lib.rs"));
         assert!(paths.contains(&"README.md"));
+        assert_eq!(res.stats.skipped_too_large, 0);
+        assert_eq!(res.stats.skipped_binary, 0);
     }
 
     #[test]
@@ -224,8 +270,8 @@ mod tests {
         let spec = parse_spec(
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: [\"target/**\"]\n---\n",
         );
-        let chunks = gather(&subject, &spec, None).unwrap();
-        let paths: Vec<&str> = chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let res = gather(&subject, &spec, None).unwrap();
+        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"src/main.rs"));
         assert!(!paths.iter().any(|p| p.starts_with("target/")));
     }
@@ -240,14 +286,33 @@ mod tests {
         let spec = parse_spec(
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n",
         );
-        let chunks = gather(&subject, &spec, Some("src/**")).unwrap();
-        let paths: Vec<&str> = chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let res = gather(&subject, &spec, Some("src/**")).unwrap();
+        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"src/a.rs"));
         assert!(!paths.iter().any(|p| p.starts_with("docs/")));
     }
 
     #[test]
-    fn skips_files_larger_than_limit() {
+    fn scope_override_preserves_spec_exclude() {
+        // --scope src/** + spec excludes target/** → target/foo.rs still
+        // excluded even though --scope just says "src/**" (which doesn't
+        // match it anyway, but tests the merge rule).
+        let tmp = tempdir().unwrap();
+        init_git(tmp.path());
+        write(&tmp.path().join("src/a.rs"), "");
+        write(&tmp.path().join("src/sub/b.rs"), "");
+        let subject = make_subject(tmp.path());
+        let spec = parse_spec(
+            "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: [\"src/sub/**\"]\n---\n",
+        );
+        let res = gather(&subject, &spec, Some("src/**")).unwrap();
+        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"src/a.rs"));
+        assert!(!paths.iter().any(|p| p.starts_with("src/sub/")));
+    }
+
+    #[test]
+    fn skips_files_larger_than_limit_and_counts_them() {
         let tmp = tempdir().unwrap();
         init_git(tmp.path());
         write(&tmp.path().join("small.txt"), "tiny");
@@ -257,27 +322,28 @@ mod tests {
         let spec = parse_spec(
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n",
         );
-        let chunks = gather(&subject, &spec, None).unwrap();
-        let paths: Vec<&str> = chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let res = gather(&subject, &spec, None).unwrap();
+        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"small.txt"));
         assert!(!paths.contains(&"big.txt"));
+        assert_eq!(res.stats.skipped_too_large, 1);
     }
 
     #[test]
-    fn skips_binary_files_silently() {
+    fn skips_binary_files_and_counts_them() {
         let tmp = tempdir().unwrap();
         init_git(tmp.path());
         write(&tmp.path().join("src/text.rs"), "fn x() {}");
-        // Write non-UTF8 bytes — read_to_string will fail and we'll skip.
         std::fs::write(tmp.path().join("data.bin"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
         let subject = make_subject(tmp.path());
         let spec = parse_spec(
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n",
         );
-        let chunks = gather(&subject, &spec, None).unwrap();
-        let paths: Vec<&str> = chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let res = gather(&subject, &spec, None).unwrap();
+        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"src/text.rs"));
         assert!(!paths.contains(&"data.bin"));
+        assert_eq!(res.stats.skipped_binary, 1);
     }
 
     #[test]
