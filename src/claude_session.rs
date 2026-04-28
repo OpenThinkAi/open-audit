@@ -61,6 +61,11 @@ pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Res
         .arg("--input-format=stream-json")
         .arg("--output-format=stream-json")
         .arg("--verbose") // claude requires --verbose with --print + stream-json
+        // --system-prompt as a CLI arg means the body sits in argv. macOS
+        // ARG_MAX is ~256 KB; current spec bodies are well under that. If
+        // we ever ship specs that approach the limit, switch to
+        // --system-prompt-file (claude supports it) which writes the
+        // prompt via a path instead.
         .arg("--system-prompt")
         .arg(system_prompt)
         .stdin(Stdio::piped())
@@ -121,16 +126,39 @@ async fn read_until_result(stdout: ChildStdout) -> Result<String> {
         };
         if let StreamEvent::Result(r) = event {
             if r.is_error || r.subtype != "success" {
-                bail!(
-                    "claude completed with non-success result (subtype: {}, is_error: {})",
-                    r.subtype,
-                    r.is_error
-                );
+                bail!("{}", explain_failure_subtype(&r.subtype, r.is_error));
             }
-            return Ok(r.result.unwrap_or_default());
+            return match r.result {
+                Some(text) if !text.is_empty() => Ok(text),
+                _ => bail!(
+                    "claude returned success but no text. The spec may have produced an empty response — re-run with a narrower scope or a different spec to debug."
+                ),
+            };
         }
     }
     bail!("claude stdout closed before emitting a result event")
+}
+
+/// Translate claude's stream-json failure subtypes into actionable
+/// messages. Falls back to the raw jargon for unknown subtypes so we
+/// still surface something instead of swallowing it.
+fn explain_failure_subtype(subtype: &str, is_error: bool) -> String {
+    match subtype {
+        "error_max_turns" => {
+            "claude hit its turn limit before finishing this spec. The spec or evidence \
+             may be too large; try narrowing --scope, splitting the spec, or running \
+             one auditor at a time."
+                .to_string()
+        }
+        "error_during_execution" => {
+            "claude encountered an error during execution. Check stderr for details; \
+             this often indicates an upstream API issue or a hook/plugin failure."
+                .to_string()
+        }
+        other => format!(
+            "claude completed with non-success result (subtype: {other}, is_error: {is_error})"
+        ),
+    }
 }
 
 async fn read_stderr(stderr: ChildStderr) -> String {
@@ -207,6 +235,21 @@ mod tests {
             let event: StreamEvent = serde_json::from_str(line).unwrap();
             assert!(matches!(event, StreamEvent::Other), "line: {line}");
         }
+    }
+
+    #[test]
+    fn known_subtypes_get_actionable_messages() {
+        let msg = explain_failure_subtype("error_max_turns", true);
+        assert!(msg.contains("turn limit"), "got: {msg}");
+        assert!(msg.contains("--scope") || msg.contains("split"), "got: {msg}");
+
+        let msg = explain_failure_subtype("error_during_execution", true);
+        assert!(msg.contains("error during execution"), "got: {msg}");
+
+        // Unknown subtypes fall through to the raw form (so we surface
+        // something instead of swallowing it).
+        let msg = explain_failure_subtype("error_brand_new", true);
+        assert!(msg.contains("error_brand_new"), "got: {msg}");
     }
 
     #[test]
