@@ -7,3 +7,7 @@ Cargo.lock.bak
 # Added by cargo
 
 /target
+
+# Node bridge: deps installed locally via npm
+bridges/*/node_modules/
+bridges/*/package-lock.json

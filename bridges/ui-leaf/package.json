@@ -1,0 +1,15 @@
+{
+  "name": "@oaudit/ui-leaf-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Node bridge: lets oaudit (Rust) drive ui-leaf via a child process + stdio protocol.",
+  "type": "module",
+  "main": "bridge.js",
+  "scripts": {
+    "test:roundtrip": "echo '{\"view\":\"spec\",\"data\":{\"markdown\":\"# Hello\"}}' | node bridge.js"
+  },
+  "dependencies": {
+    "ui-leaf": "^0.1.3",
+    "react-markdown": "^9.0.1"
+  }
+}
