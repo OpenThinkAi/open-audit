@@ -640,6 +640,7 @@ dependencies = [
  "glob",
  "gray_matter",
  "ignore",
+ "libz-sys",
  "serde",
  "serde_json",
  "serde_yaml",
