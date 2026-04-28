@@ -80,8 +80,7 @@ pub enum Format {
 pub async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Repo { target, against, scope, format } => {
-            let _ = (target, against, scope, format);
-            bail!("repo: not yet implemented");
+            audit_repo(&target, against.as_deref(), scope.as_deref(), format).await
         }
         Command::File { target, against, scope, format } => {
             let _ = (target, against, scope, format);
@@ -91,6 +90,28 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
         Command::Explain { spec, open } => explain(&spec, open).await,
         Command::Init => crate::init::scaffold(std::env::current_dir()?).await,
     }
+}
+
+async fn audit_repo(
+    target: &str,
+    against: Option<&str>,
+    scope: Option<&str>,
+    format: Format,
+) -> Result<()> {
+    let against = against.unwrap_or("untrusted/security");
+    let cwd = std::env::current_dir()?;
+    let specs = resolve::resolve(against, &cwd)?;
+    let repo = crate::subject::repo::open(target).await?;
+    let subject = crate::subject::Subject::Repo(repo);
+
+    let outcome = crate::run::run(&subject, &specs, scope).await?;
+    crate::output::emit(&outcome.report, &outcome.stats, format)?;
+
+    let code = crate::output::exit_code(&outcome.report);
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
 }
 
 async fn explain(spec: &str, open: bool) -> Result<()> {

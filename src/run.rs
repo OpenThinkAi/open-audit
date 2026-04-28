@@ -1,13 +1,231 @@
-//! Per-spec run orchestration. Stubbed until chunk E.
+//! Per-spec run orchestration.
+//!
+//! For each spec: gather evidence → format the prompt → call query_claude
+//! → parse JSON findings → tag with spec name → aggregate. Returns an
+//! `AuditReport` with all findings and the gather stats so the CLI layer
+//! can surface skip counts before the verdict.
+//!
+//! Errors in one spec abort the whole run for v1 simplicity. Multi-spec
+//! "run all, report failures separately" is a future enhancement.
 
-use crate::finding::AuditReport;
-use crate::spec::Spec;
+use crate::claude_session::query_claude;
+use crate::evidence::{self, GatherStats};
+use crate::finding::{AuditReport, Finding};
+use crate::spec::{Spec, SpecSource};
 use crate::subject::Subject;
+use anyhow::{Context, Result, bail};
 
 pub(crate) async fn run(
-    _subject: &Subject,
-    _specs: &[Spec],
-    _scope_override: Option<&str>,
-) -> anyhow::Result<AuditReport> {
-    anyhow::bail!("run::run not yet implemented")
+    subject: &Subject,
+    specs: &[Spec],
+    scope_override: Option<&str>,
+) -> Result<RunOutcome> {
+    let subject_label = subject.root().display().to_string();
+    let mut all_findings = Vec::new();
+    let mut specs_run = Vec::new();
+    let mut aggregate_stats = GatherStats::default();
+
+    for spec in specs {
+        let spec_label = spec_label(spec);
+        let gather = evidence::gather(subject, spec, scope_override)
+            .with_context(|| format!("gathering evidence for {spec_label}"))?;
+        merge_stats(&mut aggregate_stats, &gather.stats);
+
+        let prompt = build_user_prompt(&gather.chunks);
+        let response = query_claude(&spec.body, &prompt)
+            .await
+            .with_context(|| format!("querying claude for {spec_label}"))?;
+
+        let mut findings = parse_findings(&response)
+            .with_context(|| format!("parsing findings from {spec_label}"))?;
+        for f in &mut findings {
+            f.spec = Some(spec_label.clone());
+        }
+        all_findings.extend(findings);
+        specs_run.push(spec_label);
+    }
+
+    // Dedup by id (last write wins). Specs sometimes return overlapping
+    // findings (e.g., security + supply-chain both flag the same issue);
+    // keeping the later one is fine — the user gets one entry, not two.
+    all_findings.sort_by(|a, b| a.id.cmp(&b.id));
+    all_findings.dedup_by(|a, b| a.id == b.id);
+
+    Ok(RunOutcome {
+        report: AuditReport {
+            findings: all_findings,
+            specs_run,
+            subject: subject_label,
+        },
+        stats: aggregate_stats,
+    })
+}
+
+#[derive(Debug)]
+pub(crate) struct RunOutcome {
+    pub report: AuditReport,
+    pub stats: GatherStats,
+}
+
+fn spec_label(spec: &Spec) -> String {
+    match &spec.source {
+        SpecSource::Builtin(catalog) => catalog.to_string(),
+        SpecSource::Local(p) | SpecSource::AdHoc(p) => p.display().to_string(),
+    }
+}
+
+fn merge_stats(into: &mut GatherStats, from: &GatherStats) {
+    into.skipped_too_large += from.skipped_too_large;
+    into.skipped_binary += from.skipped_binary;
+    into.skipped_io_error += from.skipped_io_error;
+    for sample in &from.io_error_samples {
+        if into.io_error_samples.len() < 5 {
+            into.io_error_samples.push(sample.clone());
+        }
+    }
+}
+
+/// Build the user-role prompt: each file delimited by `=== <path> ===`,
+/// then a closing instruction so the model knows when input ends and the
+/// task starts.
+fn build_user_prompt(chunks: &[crate::evidence::EvidenceChunk]) -> String {
+    let mut out = String::new();
+    out.push_str("Files to audit:\n\n");
+    for chunk in chunks {
+        for file in &chunk.files {
+            out.push_str("=== ");
+            out.push_str(&file.path);
+            out.push_str(" ===\n");
+            out.push_str(&file.content);
+            if !file.content.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+    }
+    out.push_str(
+        "---\n\nAudit the files above per your system prompt. Return findings as a JSON array exactly matching the output contract in your system prompt. Return ONLY the JSON array — no prose before or after, no code fences.\n",
+    );
+    out
+}
+
+/// Parse a JSON array of findings from the model's response. Tolerates
+/// code-fence wrapping (```json ... ```) and surrounding prose by
+/// extracting the first `[`-prefixed JSON array we can decode.
+fn parse_findings(response: &str) -> Result<Vec<Finding>> {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Happy path: model returned bare JSON.
+    if let Ok(findings) = serde_json::from_str::<Vec<Finding>>(trimmed) {
+        return Ok(findings);
+    }
+
+    // Try to peel a ```json ... ``` (or just ``` ... ```) fence.
+    if let Some(fenced) = extract_fenced_json(trimmed)
+        && let Ok(findings) = serde_json::from_str::<Vec<Finding>>(fenced)
+    {
+        return Ok(findings);
+    }
+
+    // Last-resort: find the first `[` and last `]`, try parsing what's between.
+    if let (Some(start), Some(end)) = (trimmed.find('['), trimmed.rfind(']'))
+        && start < end
+    {
+        let slice = &trimmed[start..=end];
+        if let Ok(findings) = serde_json::from_str::<Vec<Finding>>(slice) {
+            return Ok(findings);
+        }
+    }
+
+    bail!(
+        "could not parse a JSON findings array from claude's response. First 200 chars: {}",
+        trimmed.chars().take(200).collect::<String>()
+    )
+}
+
+fn extract_fenced_json(text: &str) -> Option<&str> {
+    let after_open = text
+        .find("```json")
+        .map(|i| i + "```json".len())
+        .or_else(|| text.find("```").map(|i| i + "```".len()))?;
+    let rest = text.get(after_open..)?.trim_start();
+    let close = rest.find("```")?;
+    Some(rest[..close].trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_bare_json_array() {
+        let json = r#"[{"id":"sec-1","severity":"high","confidence":"high","title":"x","location":{"file":"a","line":1},"evidence":"e","explanation":"why","suggestion":"fix"}]"#;
+        let findings = parse_findings(json).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].id, "sec-1");
+    }
+
+    #[test]
+    fn parses_empty_array() {
+        let findings = parse_findings("[]").unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn empty_response_is_no_findings() {
+        let findings = parse_findings("").unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn parses_json_inside_code_fence() {
+        let response = "Here's the audit:\n```json\n[]\n```\nDone.";
+        let findings = parse_findings(response).unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn parses_json_inside_unlabeled_fence() {
+        let response = "```\n[]\n```";
+        let findings = parse_findings(response).unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn falls_back_to_bracket_extraction() {
+        let response = "Findings: [\n] (none)";
+        let findings = parse_findings(response).unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn errors_when_no_json_present() {
+        let err = parse_findings("nothing useful here").unwrap_err();
+        assert!(err.to_string().contains("could not parse"));
+    }
+
+    #[test]
+    fn build_user_prompt_includes_files_with_delimiters() {
+        let chunks = vec![crate::evidence::EvidenceChunk {
+            files: vec![
+                crate::evidence::EvidenceFile {
+                    path: "src/main.rs".to_string(),
+                    content: "fn main() {}".to_string(),
+                },
+                crate::evidence::EvidenceFile {
+                    path: "src/lib.rs".to_string(),
+                    content: "pub fn x() {}\n".to_string(),
+                },
+            ],
+        }];
+        let prompt = build_user_prompt(&chunks);
+        assert!(prompt.contains("=== src/main.rs ==="));
+        assert!(prompt.contains("=== src/lib.rs ==="));
+        assert!(prompt.contains("fn main() {}"));
+        assert!(prompt.contains("pub fn x() {}"));
+        assert!(prompt.contains("JSON array"));
+    }
 }
