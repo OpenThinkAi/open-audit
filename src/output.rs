@@ -27,7 +27,11 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         skipped_binary: u32,
         skipped_io_error: u32,
         io_error_samples: Vec<String>,
+        /// True when `skipped_io_error > io_error_samples.len()`. Lets
+        /// downstream tooling know the sample list isn't the full picture.
+        io_error_samples_truncated: bool,
     }
+    let truncated = stats.skipped_io_error as usize > stats.io_error_samples.len();
     let out = Output {
         report,
         gather: GatherStatsJson {
@@ -35,6 +39,7 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             skipped_binary: stats.skipped_binary,
             skipped_io_error: stats.skipped_io_error,
             io_error_samples: stats.io_error_samples.clone(),
+            io_error_samples_truncated: truncated,
         },
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
@@ -105,6 +110,10 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     .map(|(label, n, style)| style.apply_to(format!("{n} {label}")).to_string())
     .collect();
     println!("{}", parts.join(", "));
+
+    // Be explicit about the v1 gate rule so users (especially in CI) know
+    // why oaudit just exited 0 with 5 medium findings, or 1 with one high.
+    println!("{}", dim.apply_to("gate: high or critical → exit 1"));
 
     Ok(())
 }

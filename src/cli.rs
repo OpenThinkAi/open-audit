@@ -20,9 +20,11 @@ pub enum Command {
         /// URL or local path to a git repository.
         target: String,
 
-        /// Comma-separated specs (e.g. `untrusted/security,trusted/supply-chain` or `./my.md`).
-        #[arg(long)]
-        against: Option<String>,
+        /// Comma-separated specs to audit against
+        /// (e.g. `untrusted/security,trusted/supply-chain` or `./my.md`).
+        /// The default treats the subject as untrusted third-party code.
+        #[arg(long, default_value = "untrusted/security")]
+        against: String,
 
         /// Single glob to limit which files are audited. Replaces the
         /// spec's include list, but the spec's exclude list is preserved
@@ -41,8 +43,10 @@ pub enum Command {
         /// Path to file or directory.
         target: PathBuf,
 
-        #[arg(long)]
-        against: Option<String>,
+        /// Comma-separated specs to audit against. Default treats the
+        /// subject as untrusted third-party code.
+        #[arg(long, default_value = "untrusted/security")]
+        against: String,
 
         #[arg(long)]
         scope: Option<String>,
@@ -80,7 +84,7 @@ pub enum Format {
 pub async fn dispatch(cli: Cli) -> Result<u8> {
     match cli.command {
         Command::Repo { target, against, scope, format } => {
-            audit_repo(&target, against.as_deref(), scope.as_deref(), format).await
+            audit_repo(&target, &against, scope.as_deref(), format).await
         }
         Command::File { target, against, scope, format } => {
             let _ = (target, against, scope, format);
@@ -94,11 +98,10 @@ pub async fn dispatch(cli: Cli) -> Result<u8> {
 
 async fn audit_repo(
     target: &str,
-    against: Option<&str>,
+    against: &str,
     scope: Option<&str>,
     format: Format,
 ) -> Result<u8> {
-    let against = against.unwrap_or("untrusted/security");
     let cwd = std::env::current_dir()?;
     let specs = resolve::resolve(against, &cwd)?;
     let repo = crate::subject::repo::open(target).await?;
@@ -107,7 +110,7 @@ async fn audit_repo(
     let outcome = crate::run::run(&subject, &specs, scope).await?;
     crate::output::emit(&outcome.report, &outcome.stats, format)?;
 
-    Ok(crate::output::exit_code(&outcome.report) as u8)
+    Ok(crate::output::exit_code(&outcome.report))
 }
 
 async fn explain(spec: &str, open: bool) -> Result<()> {
