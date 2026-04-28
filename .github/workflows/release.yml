@@ -16,10 +16,24 @@ name: release
 # build/cross-compile work but drive the trigger + release-creation ourselves
 # so the flow matches sibling repos. dist init / generate would overwrite
 # this — allow-dirty=["ci"] in Cargo.toml prevents that.
+#
+# Known regression vs dist's default: this workflow does NOT run on PRs.
+# The original ran `dist plan` on PR pushes as a "would this build?" check.
+# We rely on the stamp-loop pre-merge review instead. If silent breakage of
+# the release pipeline becomes a problem, add a separate `pr-checks.yml`
+# that runs `dist plan` on pull_request events.
 
 on:
   push:
     branches: [main]
+
+# Don't run two releases in parallel — they'd race on `gh release create`
+# and the npm publish gate. cancel-in-progress: false so a fast double-push
+# still completes both runs sequentially (the second is a no-op if the first
+# already shipped the version).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write   # creating GitHub Releases + pushing tags
@@ -44,6 +58,7 @@ jobs:
             | jq -r '.packages[] | select(.name == "open-audit") | .version')
           if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
             echo "could not read open-audit version via cargo metadata" >&2
+            echo "expected a [package] block in Cargo.toml with name = \"open-audit\"" >&2
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -85,21 +100,33 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: create github release + upload binaries
+      - name: create or update github release + upload binaries
         if: steps.check_npm.outputs.published == 'false'
+        # Idempotent across partial failures: if the previous run created
+        # the release but failed at npm publish, this run uploads (with
+        # --clobber) into the existing release instead of erroring on
+        # "release already exists." Matters because the npm gate above is
+        # the source of truth for "is this version shipped" — a created-
+        # but-empty release shouldn't block npm retry.
+        #
+        # Globs cover any `open-audit-*.tar.xz` so adding a new target in
+        # dist's config doesn't require a workflow edit.
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
-            --target "$GITHUB_SHA" \
-            --generate-notes \
-            target/distrib/open-audit-aarch64-apple-darwin.tar.xz \
-            target/distrib/open-audit-x86_64-apple-darwin.tar.xz \
-            target/distrib/open-audit-aarch64-unknown-linux-gnu.tar.xz \
-            target/distrib/open-audit-x86_64-unknown-linux-gnu.tar.xz \
-            target/distrib/open-audit-x86_64-unknown-linux-musl.tar.xz \
-            target/distrib/sha256.sum \
-            target/distrib/open-audit-installer.sh \
-            target/distrib/source.tar.gz
+          TAG="${{ steps.version.outputs.tag }}"
+          ASSETS=( target/distrib/open-audit-*.tar.xz \
+                   target/distrib/open-audit-installer.sh \
+                   target/distrib/sha256.sum \
+                   target/distrib/source.tar.gz )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — re-uploading assets"
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --target "$GITHUB_SHA" \
+              --generate-notes \
+              "${ASSETS[@]}"
+          fi
 
       - name: publish npm wrapper (OIDC)
         if: steps.check_npm.outputs.published == 'false'
