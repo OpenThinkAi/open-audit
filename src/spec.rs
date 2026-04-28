@@ -59,18 +59,23 @@ pub fn parse(text: &str, source: SpecSource) -> Result<Spec> {
     let matter = Matter::<YAML>::new();
     let parsed = matter
         .parse::<SpecMeta>(text)
-        .with_context(|| match &source {
-            SpecSource::Builtin(catalog_path) => format!("parsing builtin spec `{catalog_path}`"),
-            SpecSource::Local(p) | SpecSource::AdHoc(p) => {
-                format!("parsing spec at {}", p.display())
-            }
-        })?;
+        .with_context(|| source_context(&source))?;
 
     let Some(meta) = parsed.data else {
-        bail!("spec missing YAML frontmatter (expected `---`-delimited block at top of file)");
+        bail!(
+            "{}: missing YAML frontmatter (expected `---`-delimited block at top of file)",
+            source_context(&source),
+        );
     };
 
     Ok(Spec { meta, body: parsed.content, source })
+}
+
+fn source_context(source: &SpecSource) -> String {
+    match source {
+        SpecSource::Builtin(catalog_path) => format!("parsing builtin spec `{catalog_path}`"),
+        SpecSource::Local(p) | SpecSource::AdHoc(p) => format!("parsing spec at {}", p.display()),
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +122,18 @@ mod tests {
     fn missing_frontmatter_errors() {
         let err = parse("just a body, no frontmatter\n", SpecSource::Builtin("test")).unwrap_err();
         assert!(err.to_string().contains("missing YAML frontmatter"));
+    }
+
+    #[test]
+    fn missing_frontmatter_error_includes_path() {
+        let err = parse(
+            "just a body, no frontmatter\n",
+            SpecSource::AdHoc(PathBuf::from("custom/auditor.md")),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("custom/auditor.md"), "expected path in error, got: {msg}");
+        assert!(msg.contains("missing YAML frontmatter"));
     }
 
     #[test]
