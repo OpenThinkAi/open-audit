@@ -42,7 +42,8 @@ pub struct SpecMeta {
 
 #[derive(Debug, Clone)]
 pub enum SpecSource {
-    Builtin,
+    /// Embedded built-in. The string is the catalog path (e.g. `"trusted/security"`).
+    Builtin(&'static str),
     Local(PathBuf),
     AdHoc(PathBuf),
 }
@@ -59,7 +60,7 @@ pub fn parse(text: &str, source: SpecSource) -> Result<Spec> {
     let parsed = matter
         .parse::<SpecMeta>(text)
         .with_context(|| match &source {
-            SpecSource::Builtin => "parsing builtin spec".to_string(),
+            SpecSource::Builtin(catalog_path) => format!("parsing builtin spec `{catalog_path}`"),
             SpecSource::Local(p) | SpecSource::AdHoc(p) => {
                 format!("parsing spec at {}", p.display())
             }
@@ -80,7 +81,7 @@ mod tests {
 
     #[test]
     fn parses_minimal_frontmatter() {
-        let spec = parse(MINIMAL, SpecSource::Builtin).unwrap();
+        let spec = parse(MINIMAL, SpecSource::Builtin("test")).unwrap();
         assert_eq!(spec.meta.name, "test");
         assert_eq!(spec.meta.mode, Mode::Trusted);
         assert_eq!(spec.meta.kind, Kind::Prompt);
@@ -103,7 +104,7 @@ mod tests {
               - obfuscation-scan\n\
             ---\n\
             # body\n";
-        let spec = parse(text, SpecSource::Builtin).unwrap();
+        let spec = parse(text, SpecSource::Builtin("test")).unwrap();
         assert_eq!(spec.meta.mode, Mode::Untrusted);
         assert_eq!(spec.meta.kind, Kind::Hybrid);
         let scope = spec.meta.default_scope.expect("scope");
@@ -114,7 +115,7 @@ mod tests {
 
     #[test]
     fn missing_frontmatter_errors() {
-        let err = parse("just a body, no frontmatter\n", SpecSource::Builtin).unwrap_err();
+        let err = parse("just a body, no frontmatter\n", SpecSource::Builtin("test")).unwrap_err();
         assert!(err.to_string().contains("missing YAML frontmatter"));
     }
 
@@ -122,14 +123,14 @@ mod tests {
     fn missing_required_field_errors() {
         // missing `kind`
         let text = "---\nname: test\nmode: trusted\n---\nbody\n";
-        let err = parse(text, SpecSource::Builtin).unwrap_err();
+        let err = parse(text, SpecSource::Builtin("test")).unwrap_err();
         assert!(format!("{err:#}").to_lowercase().contains("kind"));
     }
 
     #[test]
     fn parses_every_builtin() {
         for b in crate::builtins::all() {
-            let spec = parse(b.body, SpecSource::Builtin)
+            let spec = parse(b.body, SpecSource::Builtin(b.catalog_path))
                 .unwrap_or_else(|e| panic!("failed to parse builtin {}: {e:#}", b.catalog_path));
             // catalog_path = "<mode>/<name>"; meta.mode and meta.name should agree.
             let (mode_seg, name_seg) = b.catalog_path.split_once('/').unwrap();
