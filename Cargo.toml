@@ -10,6 +10,32 @@ repository = "https://github.com/OpenThinkAi/open-audit"
 name = "oaudit"
 path = "src/main.rs"
 
+# Config for 'dist'
+[workspace.metadata.dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.31.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "npm"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+# Publish jobs to run in CI
+publish-jobs = ["npm"]
+# Which actions to run on pull requests
+pr-run-mode = "plan"
+# Where to host releases
+hosting = "github"
+# The npm package should have this name
+npm-package = "open-audit"
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Whether to install an updater program
+install-updater = false
+# We patch the publish-npm job to use OIDC Trusted Publishing; tell dist
+# that ci-files are allowed to diverge from regen output. See RELEASING.md.
+allow-dirty = ["ci"]
+
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -39,3 +65,8 @@ tempfile = "3"
 console = "0.16"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
