@@ -146,8 +146,8 @@ fn explain_failure_subtype(subtype: &str, is_error: bool) -> String {
     match subtype {
         "error_max_turns" => {
             "claude hit its turn limit before finishing this spec. The spec or evidence \
-             may be too large; try narrowing --scope, splitting the spec, or running \
-             one auditor at a time."
+             may be too large; try narrowing --scope, splitting the spec, or passing \
+             a single spec to --against."
                 .to_string()
         }
         "error_during_execution" => {
