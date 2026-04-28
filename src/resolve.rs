@@ -1,7 +1,7 @@
 //! Resolve `--against` strings into a list of `Spec`s.
 //!
 //! Resolution per comma-separated value:
-//! - Path-shaped (contains `/` or `.`) AND points at an existing file → load that file as `AdHoc`
+//! - Path-shaped (contains `/` or `.`) AND points at an existing file → `File`
 //! - `<mode>/<name>` (catalog form) → repo-local `.oaudit/auditors/<mode>/<name>.md`
 //!   first (`Local`), else embedded built-in (`Builtin`)
 //! - Bare name (no slash, no dot) → ambiguous-error with the available builtins listed
@@ -13,6 +13,26 @@ use crate::builtins;
 use crate::spec::{self, Mode, Spec, SpecSource};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
+
+/// What a token resolved to. Both `resolve_one` (which then parses) and
+/// `lookup_raw` (which loads raw text + label) consume this — keeps the
+/// lookup chain in one place.
+enum Located {
+    File(PathBuf),
+    Local(PathBuf),
+    Builtin(&'static builtins::Builtin),
+}
+
+/// Catalog-shape classification — one place to do the `<mode>/<name>` parse
+/// and decide between the three outcomes.
+enum CatalogShape<'a> {
+    /// `<mode>/<name>` with a known mode and a clean name.
+    Known,
+    /// `<unknown-mode>/<name>` shape — caller can name the bad mode.
+    UnknownMode(&'a str),
+    /// Doesn't look like `<mode>/<name>` at all (no slash, dotted name, etc.).
+    NotCatalog,
+}
 
 pub(crate) fn resolve(against: &str, repo_root: &Path) -> Result<Vec<Spec>> {
     let mut out = Vec::new();
@@ -29,110 +49,93 @@ pub(crate) fn resolve(against: &str, repo_root: &Path) -> Result<Vec<Spec>> {
     Ok(out)
 }
 
+pub(crate) fn resolve_one(token: &str, repo_root: &Path) -> Result<Spec> {
+    match locate(token, repo_root)? {
+        Located::File(path) => load_path(&path, SpecSource::AdHoc(path.clone())),
+        Located::Local(path) => load_path(&path, SpecSource::Local(path.clone())),
+        Located::Builtin(b) => spec::parse(b.body, SpecSource::Builtin(b.catalog_path)),
+    }
+}
+
 /// Lookup the raw, unparsed text of a spec for display (no frontmatter
-/// stripping). Mirrors `resolve_one`'s lookup chain but skips parsing,
-/// so callers like `explain` get the original file content + a label
-/// suitable for display.
+/// stripping). Returns `(full_markdown, display_label)`.
 pub(crate) fn lookup_raw(token: &str, repo_root: &Path) -> Result<(String, String)> {
-    let path_shaped = token.contains('/') || token.contains('.');
-    if path_shaped {
-        let raw_path = Path::new(token);
-        if raw_path.is_file() {
-            let body = std::fs::read_to_string(raw_path)
-                .with_context(|| format!("reading spec file {}", raw_path.display()))?;
-            return Ok((body, raw_path.display().to_string()));
+    match locate(token, repo_root)? {
+        Located::File(path) => {
+            let body = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading spec file {}", path.display()))?;
+            Ok((body, path.display().to_string()))
         }
-        if looks_like_catalog(token) {
+        Located::Local(path) => {
+            let body = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading spec file {}", path.display()))?;
+            Ok((body, format!("local: {}", path.display())))
+        }
+        Located::Builtin(b) => Ok((b.body.to_string(), format!("builtin: {}", b.catalog_path))),
+    }
+}
+
+/// Shared lookup chain: file path, then catalog (local first, then builtin),
+/// with tailored errors for each not-found case.
+fn locate(token: &str, repo_root: &Path) -> Result<Located> {
+    let path_shaped = token.contains('/') || token.contains('.');
+    if !path_shaped {
+        bail!(
+            "spec `{token}` is ambiguous: bare names need to be qualified.\n  Use `<mode>/<name>` (e.g. `trusted/security`) or a path to a .md file.\n  Available builtins:\n{}",
+            builtins_index(),
+        );
+    }
+
+    let raw_path = Path::new(token);
+    if raw_path.is_file() {
+        return Ok(Located::File(raw_path.to_path_buf()));
+    }
+
+    match catalog_shape(token) {
+        CatalogShape::Known => {
             let local = repo_root
                 .join(".oaudit")
                 .join("auditors")
                 .join(format!("{token}.md"));
             if local.is_file() {
-                let body = std::fs::read_to_string(&local)
-                    .with_context(|| format!("reading spec file {}", local.display()))?;
-                return Ok((body, format!("local: {}", local.display())));
+                return Ok(Located::Local(local));
             }
             if let Some(b) = builtins::all().iter().find(|b| b.catalog_path == token) {
-                return Ok((b.body.to_string(), format!("builtin: {}", b.catalog_path)));
+                return Ok(Located::Builtin(b));
             }
             bail!(
                 "spec `{token}` not found in repo or built-ins.\n  Available builtins:\n{}",
                 builtins_index(),
             );
         }
-        // Catalog-shaped with unknown mode (`weird/security`) → name the mode
-        // explicitly. Otherwise it's a bare file path that didn't exist.
-        if let Some(unknown_mode) = unknown_mode_in_catalog_shape(token) {
+        CatalogShape::UnknownMode(mode) => {
             bail!(
-                "unknown spec mode `{unknown_mode}` in `{token}`. Known modes: {}",
+                "unknown spec mode `{mode}` in `{token}`. Known modes: {}",
                 known_modes_csv(),
             );
         }
-        bail!("spec file `{token}` not found");
-    }
-    bail!(
-        "spec `{token}` is ambiguous: bare names need to be qualified.\n  Use `<mode>/<name>` (e.g. `trusted/security`) or a path to a .md file.\n  Available builtins:\n{}",
-        builtins_index(),
-    )
-}
-
-pub(crate) fn resolve_one(token: &str, repo_root: &Path) -> Result<Spec> {
-    let path_shaped = token.contains('/') || token.contains('.');
-    if path_shaped {
-        let raw_path = Path::new(token);
-        if raw_path.is_file() {
-            return load_path(raw_path, SpecSource::AdHoc(raw_path.to_path_buf()));
+        CatalogShape::NotCatalog => {
+            let cwd = std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "current dir".to_string());
+            bail!("spec file `{token}` not found (looked relative to {cwd})");
         }
-        if looks_like_catalog(token) {
-            if let Some(spec) = try_local_catalog(token, repo_root)? {
-                return Ok(spec);
-            }
-            if let Some(b) = builtins::all().iter().find(|b| b.catalog_path == token) {
-                return spec::parse(b.body, SpecSource::Builtin(b.catalog_path));
-            }
-            bail!(
-                "spec `{token}` not found in repo or built-ins.\n  Available builtins:\n{}",
-                builtins_index(),
-            );
-        }
-        if let Some(unknown_mode) = unknown_mode_in_catalog_shape(token) {
-            bail!(
-                "unknown spec mode `{unknown_mode}` in `{token}`. Known modes: {}",
-                known_modes_csv(),
-            );
-        }
-        bail!("spec file `{token}` not found");
-    }
-    bail!(
-        "spec `{token}` is ambiguous: bare names need to be qualified.\n  Use `<mode>/<name>` (e.g. `trusted/security`) or a path to a .md file.\n  Available builtins:\n{}",
-        builtins_index(),
-    )
-}
-
-fn looks_like_catalog(token: &str) -> bool {
-    match token.split_once('/') {
-        Some((mode, name)) => {
-            !name.is_empty()
-                && !name.contains('/')
-                && !name.contains('.')
-                && Mode::ALL.iter().any(|m| m.as_str() == mode)
-        }
-        None => false,
     }
 }
 
-/// `Some(mode)` if `token` looks like `<unknown-mode>/<simple-name>` —
-/// distinguishes "user typo'd the mode" from "user passed a real path that
-/// happens not to exist."
-fn unknown_mode_in_catalog_shape(token: &str) -> Option<&str> {
-    let (mode, name) = token.split_once('/')?;
+fn catalog_shape(token: &str) -> CatalogShape<'_> {
+    let Some((mode, name)) = token.split_once('/') else {
+        return CatalogShape::NotCatalog;
+    };
     if name.is_empty() || name.contains('/') || name.contains('.') {
-        return None;
+        return CatalogShape::NotCatalog;
     }
     if Mode::ALL.iter().any(|m| m.as_str() == mode) {
-        return None;
+        CatalogShape::Known
+    } else {
+        CatalogShape::UnknownMode(mode)
     }
-    Some(mode)
 }
 
 fn known_modes_csv() -> String {
@@ -141,17 +144,6 @@ fn known_modes_csv() -> String {
         .map(|m| m.as_str())
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn try_local_catalog(token: &str, repo_root: &Path) -> Result<Option<Spec>> {
-    let path = repo_root
-        .join(".oaudit")
-        .join("auditors")
-        .join(format!("{token}.md"));
-    if !path.is_file() {
-        return Ok(None);
-    }
-    Ok(Some(load_path(&path, SpecSource::Local(path.clone()))?))
 }
 
 fn load_path(path: &Path, source: SpecSource) -> Result<Spec> {
@@ -172,8 +164,8 @@ fn builtins_index() -> String {
 
 /// Walk the repo's `.oaudit/auditors/` directory and return any `.md` files
 /// found, paired with their inferred catalog path (`<mode>/<name>`). Modes
-/// come from `Mode::ALL` so this stays in lockstep with what `resolve`
-/// considers a valid catalog.
+/// come from `Mode::ALL`; files whose stem contains a `.` are skipped so
+/// `list` and `resolve` agree on what's a valid catalog entry.
 pub(crate) fn list_local(repo_root: &Path) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
     let root = repo_root.join(".oaudit").join("auditors");
@@ -194,6 +186,12 @@ pub(crate) fn list_local(repo_root: &Path) -> Vec<(String, PathBuf)> {
             let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
+            // Skip stems with dots — catalog_shape() in the resolver
+            // rejects dotted names, so listing them would advertise specs
+            // we can't actually resolve.
+            if name.contains('.') {
+                continue;
+            }
             out.push((format!("{mode_str}/{name}"), path));
         }
     }
@@ -286,7 +284,10 @@ mod tests {
         let err = resolve("./missing.md", tmp.path()).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("spec file"), "got: {msg}");
-        assert!(!msg.contains("Available builtins"), "should not show builtins listing for file paths");
+        assert!(
+            !msg.contains("Available builtins"),
+            "should not show builtins listing for file paths"
+        );
     }
 
     #[test]
@@ -305,13 +306,25 @@ mod tests {
     }
 
     #[test]
+    fn list_local_skips_dotted_stems() {
+        // foo.bar would resolve as catalog path "trusted/foo.bar", which
+        // the resolver rejects (dot in name). list and resolve must agree.
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join(".oaudit/auditors/trusted");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("foo.bar.md"),
+            "---\nname: x\nmode: trusted\nkind: prompt\n---\n",
+        )
+        .unwrap();
+        let listed = list_local(tmp.path());
+        assert!(listed.is_empty(), "dotted stems should be skipped, got: {listed:?}");
+    }
+
+    #[test]
     fn mode_all_matches_serialization() {
-        // Pin the relationship between Mode variants and Mode::ALL.
-        // If someone adds a new variant without extending ALL, this fails.
         for mode in Mode::ALL {
             let s = mode.as_str();
-            // Round-trip via serde to make sure the serialization name
-            // matches the as_str() name (used in catalog paths).
             let json = serde_json::to_string(mode).unwrap();
             assert_eq!(json, format!("\"{s}\""));
         }

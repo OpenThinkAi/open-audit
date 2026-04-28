@@ -14,9 +14,11 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// Single source of truth for "which modes exist." Adding a Mode
-    /// variant requires extending this slice — the compiler doesn't enforce
-    /// that, so a debug_assert in tests pins the relationship.
+    /// Single source of truth for "which modes exist." Consumed by
+    /// `resolve.rs` for catalog parsing and listing. Adding a `Mode`
+    /// variant requires extending this slice — the compiler doesn't
+    /// enforce that, so anyone adding one should also add a test
+    /// asserting the new variant is in `Mode::ALL`.
     pub const ALL: &'static [Mode] = &[Mode::Trusted, Mode::Untrusted];
 
     pub fn as_str(self) -> &'static str {
