@@ -41,6 +41,23 @@ permissions:
 # Trigger: on push to main (matches OpenThinkAi pattern). Reads version
 # from Cargo.toml; if open-audit@<version> is already on npm, every other
 # job short-circuits via `needs.plan.outputs.publishing == 'false'`.
+#
+# Acknowledged regressions vs the prior hand-rolled workflow:
+#
+#   1. Partial-failure recovery is dist-managed, not gh-managed.
+#      The previous workflow had explicit `gh release view ... --clobber`
+#      logic so a created-but-not-uploaded release could be recovered by
+#      re-pushing. dist's host job manages the release lifecycle through
+#      its own draft → upload → release steps. If a run fails mid-flight
+#      (npm publish fails, network blip during upload), the recovery
+#      procedure is: delete the partial GitHub Release manually, then
+#      re-trigger by pushing any commit. See RELEASING.md.
+#
+#   2. No PR-time `dist plan` check. The previous workflow ran on PRs
+#      to catch "this won't build" before merge. We rely on the stamp-loop
+#      pre-merge review for that; if silent breakage of the release
+#      pipeline becomes a problem, add a separate `pr-checks.yml` that
+#      runs `dist plan` on pull_request events.
 on:
   push:
     branches: [main]
@@ -330,7 +347,11 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ needs.plan.outputs.val }}
-    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    # PATCHED: gate on `publishing` first so fromJson never runs on an
+    # empty val (when the npm gate skipped). Belt-and-suspenders — the
+    # `needs:` chain already prevents this job from running when host
+    # skipped, but defensive consistency matters in CI.
+    if: ${{ needs.plan.outputs.publishing == 'true' && (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
     steps:
       - name: Fetch npm packages
         uses: actions/download-artifact@v7

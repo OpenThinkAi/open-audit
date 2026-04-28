@@ -106,6 +106,32 @@ Idempotent: any push to main that doesn't bump the version is a no-op.
 The npm package is a thin wrapper that downloads the matching platform
 binary on `npm install`.
 
+## Partial failure recovery
+
+If the workflow fails mid-release (npm publish fails, an upload step
+errors, etc.), the GitHub Release for `v<version>` may exist in draft
+state but not be fully populated, AND the npm publish may not have
+succeeded. The npm gate (`npm view open-audit@<version>`) is the
+source of truth for "shipped" — but `gh release create` will refuse
+to create a duplicate, so a naive retry-by-pushing will fail.
+
+**Recovery procedure:**
+
+```sh
+# 1. Delete the partial GitHub Release (this also deletes the v<version> tag).
+gh release delete v0.1.1 --cleanup-tag --yes
+
+# 2. Re-trigger CI by pushing any commit to main (smallest possible change works).
+git commit --allow-empty -m "release: retry v0.1.1"
+stamp merge ... # if going through stamp loop
+stamp push main
+```
+
+The npm gate will see `open-audit@<version>` is still not published, so
+the release flow runs end-to-end fresh. If the failure was transient
+(network, OIDC blip), this should succeed; if it's a real bug, fix in a
+new commit and let auto-flow take it.
+
 ## Manual release verification
 
 After CI completes, verify:
