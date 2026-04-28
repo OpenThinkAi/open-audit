@@ -15,25 +15,33 @@ No manual tag pushes, no `gh release` commands, no `npm publish` from
 your laptop. Bump the version, ship it through the stamp loop, and CI
 handles the rest.
 
-## Targets shipped
+## Targets shipped (starting v0.1.1)
 
 - `aarch64-apple-darwin` (Apple Silicon)
 - `x86_64-apple-darwin` (Intel macOS)
 - `x86_64-unknown-linux-gnu`
 - `x86_64-unknown-linux-musl`
 
+Note: v0.1.0 was the npm-name-claim bootstrap publish — the wrapper
+exists but no platform binaries were ever uploaded to GitHub Releases,
+so `npm install -g open-audit@0.1.0` doesn't actually install anything
+runnable. v0.1.1 is the first release with binaries.
+
 **Not yet shipped — short list for v0.2:**
 
-- **`aarch64-unknown-linux-gnu` / `aarch64-unknown-linux-musl`** (ARM
-  Linux). Cross-compiling these from a single macOS runner via
-  cargo-zigbuild fails on `libz-sys`'s build script — `ar` (zig wrapper)
-  can't produce `libz.a` for the ARM target. The fix is one of:
-  switch to dist's matrix-per-target shape (one Linux runner does the
-  Linux ARM builds natively); install a real aarch64-linux cross
-  toolchain instead of zig; or vendor a precompiled libz. None are v1
-  blockers.
-- **Windows (`x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`).** Same
-  matrix-per-target reshape would unlock these too. Deferred.
+- **`aarch64-unknown-linux-gnu`** (ARM Linux glibc — Raspberry Pi,
+  Graviton, Ampere). Was originally targeted for v0.1.1; cross-compile
+  via cargo-zigbuild from macOS hits a `libz-sys` build-script failure
+  (`ar` wrapper can't produce `libz.a`). Fix paths: switch to dist's
+  matrix-per-target shape (Linux ARM runs natively on a Linux runner);
+  install a real `aarch64-linux-gnu` cross toolchain instead of zig;
+  or vendor a precompiled libz.
+- **`aarch64-unknown-linux-musl`** (ARM Linux musl — Alpine ARM). Same
+  cross-compile family, never tried in v0.1.1; expected to need the
+  same fix.
+- **Windows (`x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`).** The
+  matrix-per-target reshape that unlocks ARM Linux unlocks these too.
+  Deferred.
 
 ## Bootstrap (one-time)
 
