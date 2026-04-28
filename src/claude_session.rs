@@ -79,15 +79,21 @@ pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Res
     let stdout = child.stdout.take().context("claude stdout missing")?;
     let stderr = child.stderr.take().context("claude stderr missing")?;
 
+    // Drain stderr concurrently. If we waited until after stdout finished,
+    // a claude process that writes more than the ~64 KB stderr pipe buffer
+    // would block on its stderr write → never close stdout → we'd deadlock
+    // forever in read_until_result.
+    let stderr_task = tokio::spawn(read_stderr(stderr));
+
     write_request(stdin, user_message).await?;
     let result = read_until_result(stdout).await;
 
     let status = child.wait().await.context("waiting for claude child")?;
+    let stderr_text = stderr_task.await.unwrap_or_default();
 
     match result {
         Ok(text) => Ok(text),
         Err(e) => {
-            let stderr_text = read_stderr(stderr).await;
             if !status.success() {
                 bail!(
                     "claude exited with {status}.\n  stderr: {}\n  parse: {e:#}",
