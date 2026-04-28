@@ -1,0 +1,64 @@
+name: auto-tag
+
+# On every push to main, derive the version from Cargo.toml. If no tag
+# exists at v<version> yet, create one and push it. The tag push fires
+# release.yml (which builds binaries + publishes to npm).
+#
+# The push uses a PAT (RELEASE_PAT secret), NOT GITHUB_TOKEN, because
+# tags pushed by GITHUB_TOKEN don't trigger downstream workflows — that's
+# GitHub's loop-prevention safeguard. PAT setup is documented in
+# RELEASING.md.
+#
+# Idempotent: if v<version> already exists (manual tag, prior run, etc.)
+# this is a no-op.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
+          persist-credentials: true
+
+      - name: read version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep -E '^version = "' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "could not parse version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Cargo.toml version: $VERSION"
+
+      - name: check if tag exists
+        id: check
+        run: |
+          if git rev-parse "refs/tags/${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.version.outputs.tag }} already exists — skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.version.outputs.tag }} not present — will create."
+          fi
+
+      - name: create + push tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "stamp-mirror-bot"
+          git config user.email "noreply@openthink.dev"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "release: ${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+          echo "pushed tag ${{ steps.version.outputs.tag }}"
