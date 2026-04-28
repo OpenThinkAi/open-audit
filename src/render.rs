@@ -55,10 +55,10 @@ pub async fn render_spec(markdown: &str, title: Option<&str>) -> Result<()> {
     let bridge = locate_bridge();
     if !bridge.exists() {
         bail!(
-            "ui-leaf bridge not found at {}\n  \
-             The --ui flag is dev-only in this build; \
+            "browser-render bridge not found at {}\n  \
+             The --open flag is dev-only in this build; \
              a released binary needs OAUDIT_UI_BRIDGE pointing at a bridge.js.\n  \
-             Drop --ui to print the spec to stdout instead.",
+             Drop --open to print the spec to stdout instead.",
             bridge.display(),
         );
     }

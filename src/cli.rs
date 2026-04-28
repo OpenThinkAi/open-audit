@@ -50,14 +50,14 @@ pub enum Command {
     /// List available specs (built-in + repo-local + ad-hoc).
     List,
 
-    /// Print a spec's full content (or open in browser with --ui).
+    /// Print a spec's full content (or open in browser with --open).
     Explain {
         /// Spec name (e.g. `untrusted/security`) or path to a .md file.
         spec: String,
 
-        /// Open the spec in a browser via the ui-leaf bridge instead of printing.
+        /// Open the spec in a browser instead of printing to stdout.
         #[arg(long)]
-        ui: bool,
+        open: bool,
     },
 
     /// Scaffold .oaudit/ in the current directory.
@@ -84,7 +84,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let _ = crate::builtins::all();
             bail!("list: not yet implemented");
         }
-        Command::Explain { spec, ui } => explain(&spec, ui).await,
+        Command::Explain { spec, open } => explain(&spec, open).await,
         Command::Init => {
             crate::init::scaffold(std::env::current_dir()?).await
         }
@@ -93,9 +93,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
 /// Look up `spec` as either a filesystem path or a builtin catalog path
 /// (`<mode>/<name>`), and either print its body or render it in a browser.
-async fn explain(spec: &str, ui: bool) -> Result<()> {
+async fn explain(spec: &str, open: bool) -> Result<()> {
     let (markdown, label) = lookup_spec_body(spec)?;
-    if ui {
+    if open {
         render::render_spec(&markdown, Some(&label)).await
     } else {
         if markdown.ends_with('\n') {
