@@ -9,6 +9,7 @@ mod evidence;
 mod finding;
 mod init;
 mod output;
+mod render;
 mod resolve;
 mod run;
 mod sandbox;

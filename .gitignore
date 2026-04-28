@@ -7,3 +7,7 @@ Cargo.lock.bak
 # Added by cargo
 
 /target
+
+# Node bridge: deps installed locally via npm. node_modules is huge;
+# package-lock.json is committed for reproducible installs + supply-chain audit.
+bridges/*/node_modules/
