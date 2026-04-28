@@ -4,7 +4,9 @@
 //! `default_scope` (or a CLI `--scope` override); skip large or non-UTF8
 //! files. No chunking — return a single `EvidenceChunk` containing every
 //! eligible file. Run-time chunking against the model's context window
-//! is deferred; for now we error if the bundle is implausibly large.
+//! is deferred; if the bundle is too large for the model, the failure
+//! surfaces as an API error from the LLM call layer (chunk E owns
+//! turning that into a friendlier message).
 //!
 //! Skips are counted in the returned `GatherStats` so the CLI layer can
 //! eventually surface them to the user before the verdict ("skipped 12
