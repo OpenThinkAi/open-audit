@@ -98,13 +98,17 @@ async fn explain(spec: &str, ui: bool) -> Result<()> {
     if ui {
         render::render_spec(&markdown, Some(&label)).await
     } else {
-        print!("{markdown}");
+        if markdown.ends_with('\n') {
+            print!("{markdown}");
+        } else {
+            println!("{markdown}");
+        }
         Ok(())
     }
 }
 
 fn lookup_spec_body(spec: &str) -> Result<(String, String)> {
-    let path_shaped = spec.contains('/') || spec.contains('.') || spec.starts_with('~');
+    let path_shaped = spec.contains('/') || spec.contains('.');
 
     if path_shaped {
         let path = Path::new(spec);
@@ -119,11 +123,23 @@ fn lookup_spec_body(spec: &str) -> Result<(String, String)> {
             return Ok((b.body.to_string(), format!("builtin: {}", b.catalog_path)));
         }
         bail!(
-            "spec `{spec}` not found as a file path nor a builtin catalog path.\n  Try `oaudit list` to see available specs."
+            "spec `{spec}` not found as a file path nor a builtin catalog path.\n  Available builtins:\n{}",
+            builtins_index(),
         );
     }
 
     bail!(
-        "spec `{spec}` is ambiguous: bare names need to be qualified.\n  Use `<mode>/<name>` (e.g. `trusted/security`) or a path to a .md file."
+        "spec `{spec}` is ambiguous: bare names need to be qualified.\n  Use `<mode>/<name>` (e.g. `trusted/security`) or a path to a .md file.\n  Available builtins:\n{}",
+        builtins_index(),
     )
+}
+
+fn builtins_index() -> String {
+    let mut lines = String::new();
+    for b in builtins::all() {
+        lines.push_str("    ");
+        lines.push_str(b.catalog_path);
+        lines.push('\n');
+    }
+    lines.trim_end().to_string()
 }

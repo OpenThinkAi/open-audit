@@ -55,7 +55,10 @@ pub async fn render_spec(markdown: &str, title: Option<&str>) -> Result<()> {
     let bridge = locate_bridge();
     if !bridge.exists() {
         bail!(
-            "ui-leaf bridge not found at {}\n  set OAUDIT_UI_BRIDGE to override",
+            "ui-leaf bridge not found at {}\n  \
+             The --ui flag is dev-only in this build; \
+             a released binary needs OAUDIT_UI_BRIDGE pointing at a bridge.js.\n  \
+             Drop --ui to print the spec to stdout instead.",
             bridge.display(),
         );
     }
@@ -65,6 +68,7 @@ pub async fn render_spec(markdown: &str, title: Option<&str>) -> Result<()> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit()) // ui-leaf chatter goes through to user terminal
+        .kill_on_drop(true)        // any early return → no orphaned dev server
         .spawn()
         .with_context(|| format!("spawning `node {}`", bridge.display()))?;
 
