@@ -13,6 +13,22 @@ pub enum Mode {
     Untrusted,
 }
 
+impl Mode {
+    /// Single source of truth for "which modes exist." Consumed by
+    /// `resolve.rs` for catalog parsing and listing. Adding a `Mode`
+    /// variant requires extending this slice — the compiler doesn't
+    /// enforce that, so anyone adding one should also add a test
+    /// asserting the new variant is in `Mode::ALL`.
+    pub const ALL: &'static [Mode] = &[Mode::Trusted, Mode::Untrusted];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Trusted => "trusted",
+            Mode::Untrusted => "untrusted",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {

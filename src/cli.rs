@@ -1,9 +1,10 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::PathBuf;
 
-use crate::builtins;
 use crate::render;
+use crate::resolve;
 
 #[derive(Parser, Debug)]
 #[command(name = "oaudit", version, about = "Audit codebases against composable spec docs.")]
@@ -47,7 +48,7 @@ pub enum Command {
         format: Format,
     },
 
-    /// List available specs (built-in + repo-local + ad-hoc).
+    /// List available specs (built-in + repo-local).
     List,
 
     /// Print a spec's full content (or open in browser with --open).
@@ -83,66 +84,63 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let _ = (target, against, scope, format);
             bail!("file: not yet implemented");
         }
-        Command::List => {
-            let _ = crate::builtins::all();
-            bail!("list: not yet implemented");
-        }
+        Command::List => list_specs(),
         Command::Explain { spec, open } => explain(&spec, open).await,
-        Command::Init => {
-            crate::init::scaffold(std::env::current_dir()?).await
-        }
+        Command::Init => crate::init::scaffold(std::env::current_dir()?).await,
     }
 }
 
-/// Look up `spec` as either a filesystem path or a builtin catalog path
-/// (`<mode>/<name>`), and either print its body or render it in a browser.
 async fn explain(spec: &str, open: bool) -> Result<()> {
-    let (markdown, label) = lookup_spec_body(spec)?;
+    let cwd = std::env::current_dir()?;
+    let (full, label) = resolve::lookup_raw(spec, &cwd)?;
+
     if open {
-        render::render_spec(&markdown, Some(&label)).await
+        render::render_spec(&full, Some(&label)).await
+    } else if full.ends_with('\n') {
+        print!("{full}");
+        Ok(())
     } else {
-        if markdown.ends_with('\n') {
-            print!("{markdown}");
-        } else {
-            println!("{markdown}");
-        }
+        println!("{full}");
         Ok(())
     }
 }
 
-fn lookup_spec_body(spec: &str) -> Result<(String, String)> {
-    let path_shaped = spec.contains('/') || spec.contains('.');
+fn list_specs() -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let local = resolve::list_local(&cwd);
+    let local_paths: HashSet<&str> = local.iter().map(|(p, _)| p.as_str()).collect();
 
-    if path_shaped {
-        let path = Path::new(spec);
-        if path.is_file() {
-            let body = std::fs::read_to_string(path)
-                .with_context(|| format!("reading spec file {}", path.display()))?;
-            return Ok((body, path.display().to_string()));
-        }
-        // Catalog-shaped strings (`trusted/security`) take this branch but the
-        // file doesn't exist on disk — fall through to the builtin lookup.
-        if let Some(b) = builtins::all().iter().find(|b| b.catalog_path == spec) {
-            return Ok((b.body.to_string(), format!("builtin: {}", b.catalog_path)));
-        }
-        bail!(
-            "spec `{spec}` not found as a file path nor a builtin catalog path.\n  Available builtins:\n{}",
-            builtins_index(),
-        );
+    let mut builtins: Vec<&crate::builtins::Builtin> = crate::builtins::all().iter().collect();
+    builtins.sort_by_key(|b| b.catalog_path);
+
+    println!("built-in specs (use `oaudit explain <mode>/<name>` to view):");
+    for b in builtins {
+        let suffix = if local_paths.contains(b.catalog_path) {
+            "  (overridden by local)"
+        } else {
+            ""
+        };
+        println!("  {}{}", b.catalog_path, suffix);
     }
 
-    bail!(
-        "spec `{spec}` is ambiguous: bare names need to be qualified.\n  Use `<mode>/<name>` (e.g. `trusted/security`) or a path to a .md file.\n  Available builtins:\n{}",
-        builtins_index(),
-    )
+    if local.is_empty() {
+        println!();
+        println!("(no repo-local specs at .oaudit/auditors/ — `oaudit init` scaffolds it)");
+    } else {
+        let builtin_paths: HashSet<&str> =
+            crate::builtins::all().iter().map(|b| b.catalog_path).collect();
+        println!();
+        println!("repo-local specs (use `oaudit explain <mode>/<name>` to view):");
+        for (catalog, path) in &local {
+            let rel = path.strip_prefix(&cwd).unwrap_or(path);
+            let suffix = if builtin_paths.contains(catalog.as_str()) {
+                "  (overrides built-in)"
+            } else {
+                ""
+            };
+            println!("  {}  ({}){}", catalog, rel.display(), suffix);
+        }
+    }
+    Ok(())
 }
 
-fn builtins_index() -> String {
-    let mut lines = String::new();
-    for b in builtins::all() {
-        lines.push_str("    ");
-        lines.push_str(b.catalog_path);
-        lines.push('\n');
-    }
-    lines.trim_end().to_string()
-}
