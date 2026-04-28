@@ -14,19 +14,18 @@ pub(crate) fn emit(report: &AuditReport, stats: &GatherStats, format: Format) ->
 }
 
 fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
-    // Stuff stats into a wrapper so machine consumers see them too.
     #[derive(serde::Serialize)]
     struct Output<'a> {
         #[serde(flatten)]
         report: &'a AuditReport,
-        gather: GatherStatsJson,
+        gather: GatherStatsJson<'a>,
     }
     #[derive(serde::Serialize)]
-    struct GatherStatsJson {
+    struct GatherStatsJson<'a> {
         skipped_too_large: u32,
         skipped_binary: u32,
         skipped_io_error: u32,
-        io_error_samples: Vec<String>,
+        io_error_samples: &'a [String],
         /// True when `skipped_io_error > io_error_samples.len()`. Lets
         /// downstream tooling know the sample list isn't the full picture.
         io_error_samples_truncated: bool,
@@ -38,7 +37,7 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             skipped_too_large: stats.skipped_too_large,
             skipped_binary: stats.skipped_binary,
             skipped_io_error: stats.skipped_io_error,
-            io_error_samples: stats.io_error_samples.clone(),
+            io_error_samples: &stats.io_error_samples,
             io_error_samples_truncated: truncated,
         },
     };
