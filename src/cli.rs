@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use crate::render;
 use crate::resolve;
-use crate::spec::SpecSource;
 
 #[derive(Parser, Debug)]
 #[command(name = "oaudit", version, about = "Audit codebases against composable spec docs.")]
@@ -92,22 +91,7 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
 
 async fn explain(spec: &str, open: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let resolved = resolve::resolve_one(spec, &cwd)?;
-    let label = source_label(&resolved.source);
-
-    // Render the full file (frontmatter + body) so `explain` matches its
-    // help text ("full content"). resolve_one gave us body-only via spec
-    // parsing — read the raw file for the original to preserve frontmatter.
-    let full = match &resolved.source {
-        SpecSource::Builtin(catalog) => crate::builtins::all()
-            .iter()
-            .find(|b| b.catalog_path == *catalog)
-            .map(|b| b.body.to_string())
-            .unwrap_or(resolved.body),
-        SpecSource::Local(p) | SpecSource::AdHoc(p) => {
-            std::fs::read_to_string(p).unwrap_or(resolved.body)
-        }
-    };
+    let (full, label) = resolve::lookup_raw(spec, &cwd)?;
 
     if open {
         render::render_spec(&full, Some(&label)).await
@@ -143,20 +127,20 @@ fn list_specs() -> Result<()> {
         println!();
         println!("(no repo-local specs at .oaudit/auditors/ — `oaudit init` scaffolds it)");
     } else {
+        let builtin_paths: std::collections::HashSet<&str> =
+            crate::builtins::all().iter().map(|b| b.catalog_path).collect();
         println!();
         println!("repo-local specs (use `oaudit explain <mode>/<name>` to view):");
         for (catalog, path) in &local {
             let rel = path.strip_prefix(&cwd).unwrap_or(path);
-            println!("  {}  ({})", catalog, rel.display());
+            let suffix = if builtin_paths.contains(catalog.as_str()) {
+                ", overrides built-in"
+            } else {
+                ""
+            };
+            println!("  {}  ({}{})", catalog, rel.display(), suffix);
         }
     }
     Ok(())
 }
 
-fn source_label(source: &SpecSource) -> String {
-    match source {
-        SpecSource::Builtin(catalog) => format!("builtin: {catalog}"),
-        SpecSource::Local(p) => format!("local: {}", p.display()),
-        SpecSource::AdHoc(p) => p.display().to_string(),
-    }
-}

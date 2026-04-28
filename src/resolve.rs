@@ -26,9 +26,48 @@ pub fn resolve(against: &str, repo_root: &Path) -> Result<Vec<Spec>> {
         out.push(resolve_one(token, repo_root)?);
     }
     if out.is_empty() {
-        bail!("--against was empty after splitting on commas");
+        bail!("--against requires at least one spec");
     }
     Ok(out)
+}
+
+/// Lookup the raw, unparsed text of a spec for display (no frontmatter
+/// stripping). Mirrors `resolve_one`'s lookup chain but skips parsing,
+/// so callers like `explain` get the original file content + a label
+/// suitable for display.
+pub fn lookup_raw(token: &str, repo_root: &Path) -> Result<(String, String)> {
+    let path_shaped = token.contains('/') || token.contains('.');
+    if path_shaped {
+        let raw_path = Path::new(token);
+        if raw_path.is_file() {
+            let body = std::fs::read_to_string(raw_path)
+                .with_context(|| format!("reading spec file {}", raw_path.display()))?;
+            return Ok((body, raw_path.display().to_string()));
+        }
+        if looks_like_catalog(token) {
+            let local = repo_root
+                .join(".oaudit")
+                .join("auditors")
+                .join(format!("{token}.md"));
+            if local.is_file() {
+                let body = std::fs::read_to_string(&local)
+                    .with_context(|| format!("reading spec file {}", local.display()))?;
+                return Ok((body, format!("local: {}", local.display())));
+            }
+            if let Some(b) = builtins::all().iter().find(|b| b.catalog_path == token) {
+                return Ok((b.body.to_string(), format!("builtin: {}", b.catalog_path)));
+            }
+            bail!(
+                "spec `{token}` not found in repo or built-ins.\n  Available builtins:\n{}",
+                builtins_index(),
+            );
+        }
+        bail!("spec file `{token}` not found");
+    }
+    bail!(
+        "spec `{token}` is ambiguous: bare names need to be qualified.\n  Use `<mode>/<name>` (e.g. `trusted/security`) or a path to a .md file.\n  Available builtins:\n{}",
+        builtins_index(),
+    )
 }
 
 pub fn resolve_one(token: &str, repo_root: &Path) -> Result<Spec> {
@@ -51,10 +90,16 @@ pub fn resolve_one(token: &str, repo_root: &Path) -> Result<Spec> {
         if let Some(b) = builtins::all().iter().find(|b| b.catalog_path == token) {
             return spec::parse(b.body, SpecSource::Builtin(b.catalog_path));
         }
-        bail!(
-            "spec `{token}` not found as a file path nor a builtin catalog path.\n  Available builtins:\n{}",
-            builtins_index(),
-        );
+        // Tailor the error: file-path-looking inputs (e.g. `./foo.md`) get
+        // a "no such file" message, not a builtins listing they don't want.
+        // Catalog-shaped misses keep the builtins listing.
+        if looks_like_catalog(token) {
+            bail!(
+                "spec `{token}` not found in repo or built-ins.\n  Available builtins:\n{}",
+                builtins_index(),
+            );
+        }
+        bail!("spec file `{token}` not found");
     }
 
     bail!(
@@ -98,7 +143,7 @@ fn load_path(path: &Path, source: SpecSource) -> Result<Spec> {
     spec::parse(&body, source)
 }
 
-pub fn builtins_index() -> String {
+fn builtins_index() -> String {
     let mut lines = String::new();
     for b in builtins::all() {
         lines.push_str("    ");
@@ -116,7 +161,7 @@ pub fn list_local(repo_root: &Path) -> Vec<(String, PathBuf)> {
     if !root.is_dir() {
         return out;
     }
-    for mode in ["trusted", "untrusted"] {
+    for mode in KNOWN_MODES {
         let mode_dir = root.join(mode);
         let Ok(entries) = std::fs::read_dir(&mode_dir) else {
             continue;
