@@ -112,7 +112,7 @@ fn list_specs() -> Result<()> {
     let local_paths: std::collections::HashSet<&str> =
         local.iter().map(|(p, _)| p.as_str()).collect();
 
-    println!("built-in specs (use `oaudit explain <name>` to view):");
+    println!("built-in specs (use `oaudit explain <mode>/<name>` to view):");
     for b in crate::builtins::all() {
         let suffix = if local_paths.contains(b.catalog_path) {
             "  (overridden by local)"
@@ -124,7 +124,7 @@ fn list_specs() -> Result<()> {
 
     if !local.is_empty() {
         println!();
-        println!("repo-local specs (.oaudit/auditors/):");
+        println!("repo-local specs (use `oaudit explain <mode>/<name>` to view):");
         for (catalog, path) in &local {
             let rel = path.strip_prefix(&cwd).unwrap_or(path);
             println!("  {}  ({})", catalog, rel.display());
