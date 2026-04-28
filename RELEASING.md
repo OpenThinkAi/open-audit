@@ -29,22 +29,19 @@ handles the rest.
   installer matrix entry + a bit of `dist` config. No blocker, just
   deferred to keep v1 small.
 
-## Bootstrap (one-time, two pieces)
-
-### 1. npm package + Trusted Publisher
+## Bootstrap (one-time)
 
 OIDC Trusted Publishing requires the npm package to exist before it can
-trust a workflow. So the very first publish has to happen with an npm
-auth token, locally. Once the package exists and the Trusted Publisher
-is configured, CI publishes from then on without any token.
+trust a workflow. So the very first publish happens with an npm auth
+token, locally. After that, CI takes over with zero secrets.
 
 ```sh
-# Make sure cargo and dist are installed
+# Tools
 brew install cargo-dist cargo-zigbuild zig
 
 # Verify the local build is clean
 cargo test
-dist plan                   # prints what would be built/published
+dist plan
 
 # Bump version in Cargo.toml (e.g., 0.1.0)
 
@@ -62,35 +59,8 @@ npm publish --access public ./target/distrib/open-audit-npm-package.tar.gz
 #     → environment: (leave blank)
 ```
 
-After the Trusted Publisher is configured, you never publish manually again.
-
-### 2. RELEASE_PAT secret for auto-tag
-
-`auto-tag.yml` pushes the tag using a personal access token, NOT
-`GITHUB_TOKEN`. This is required because tags pushed by `GITHUB_TOKEN`
-do not trigger downstream workflows (loop-prevention). Without `RELEASE_PAT`,
-auto-tag will create the tag but `release.yml` will never fire.
-
-**To create the PAT:**
-
-1. https://github.com/settings/personal-access-tokens/new
-2. Resource owner: `OpenThinkAi`
-3. Repository access: **Only select repositories** → `OpenThinkAi/open-audit`
-4. Permissions → Repository permissions:
-   - **Contents: Read and write** (needed to push tags)
-   - everything else: No access
-5. Expiration: 1 year (set a calendar reminder to rotate)
-6. Copy the generated `github_pat_*` token
-
-**Add as repo secret:**
-
-1. https://github.com/OpenThinkAi/open-audit/settings/secrets/actions
-2. New repository secret
-3. Name: `RELEASE_PAT`
-4. Value: paste the PAT
-5. Save
-
-That's it. Auto-tag uses it on the next push to main. Rotate yearly.
+After the Trusted Publisher is configured, every release is driven by a
+Cargo.toml version bump — no tokens, no manual tag pushes.
 
 ## Cutting a release (recurring — the whole flow)
 
@@ -102,21 +72,22 @@ git checkout -b release/v0.1.1
 # edit Cargo.toml: version = "0.1.1"
 git add Cargo.toml Cargo.lock && git commit -m "release: bump to v0.1.1"
 
-# 3. Send through the stamp loop (the bump is a reviewable change).
+# 3. Send through the stamp loop.
 stamp review --diff main..release/v0.1.1
 stamp merge release/v0.1.1 --into main
 stamp push main
 ```
 
-That's it. CI handles everything else:
+That's it. CI handles the rest:
 
 1. Stamp server post-receive hook mirrors `main` to GitHub.
-2. `auto-tag.yml` fires on the GH push, reads `Cargo.toml`, sees `0.1.1`,
-   creates and pushes the `v0.1.1` tag (using `RELEASE_PAT`).
-3. `release.yml` fires on the new tag:
+2. `release.yml` fires on the GitHub push to main:
+   - Reads version from `Cargo.toml` (skips if `open-audit@<version>` already on npm)
    - Cross-compiles binaries for all configured targets via `cargo-zigbuild`
-   - Creates a GitHub Release at `v0.1.1` with binaries + checksums attached
-   - Publishes `open-audit@0.1.1` to npm via OIDC + `--provenance`
+   - Creates a GitHub Release at `v<version>` with binaries + checksums
+   - Publishes `open-audit@<version>` to npm via OIDC + `--provenance`
+
+Idempotent: any push to main that doesn't bump the version is a no-op.
 
 The npm package is a thin wrapper that downloads the matching platform
 binary on `npm install`.
@@ -141,11 +112,11 @@ oaudit explain trusted/security | head -5
 
 ## When `dist init` regenerates the workflow
 
-`dist init` (and `dist generate`) overwrite `.github/workflows/release.yml`.
-We've patched the `publish-npm` job to use OIDC instead of NPM_TOKEN —
-those patches are documented inline (see the comment block above the job).
-After any regen, re-apply the diff or your CI will silently fall back to
-needing NPM_TOKEN.
+`dist init` and `dist generate` will try to overwrite
+`.github/workflows/release.yml` with their own tag-triggered version. Our
+workflow is a custom rewrite — push-to-main + version detection, matching
+the OpenThinkAi pattern (stamp-cli, ui-leaf). `allow-dirty = ["ci"]` in
+`Cargo.toml` tells dist to leave the file alone.
 
-If we set this up enough times to be annoying, consider filing an issue
-upstream for an `npm-trusted-publishing = true` config knob.
+If you regenerate, restore the workflow from git instead of re-applying
+the dist default.
