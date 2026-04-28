@@ -39,14 +39,18 @@ pub(crate) struct GatherResult {
 pub(crate) struct GatherStats {
     pub skipped_too_large: u32,
     pub skipped_binary: u32,
-    pub skipped_walk_error: u32,
-    /// First few walk-error messages captured so the user has something
-    /// to act on when `skipped_walk_error > 0`. Cap is small on purpose —
-    /// we want a sample, not a flood.
-    pub walk_error_samples: Vec<String>,
+    /// Walker entry errors AND per-file metadata failures. Both cases
+    /// share this counter because they're the same failure category from
+    /// the user's perspective: "couldn't read this file." Samples below
+    /// capture context for the first few.
+    pub skipped_io_error: u32,
+    /// First few I/O error messages captured so the user has something
+    /// to act on when `skipped_io_error > 0`. Cap is small on purpose —
+    /// a sample, not a flood.
+    pub io_error_samples: Vec<String>,
 }
 
-const WALK_ERROR_SAMPLE_CAP: usize = 5;
+const IO_ERROR_SAMPLE_CAP: usize = 5;
 
 #[derive(Debug)]
 pub(crate) struct EvidenceChunk {
@@ -65,13 +69,13 @@ pub(crate) fn gather(
     spec: &Spec,
     scope_override: Option<&str>,
 ) -> Result<GatherResult> {
-    let root = subject.root().clone();
+    let root = subject.root();
     let scope = effective_scope(spec, scope_override)?;
 
     let mut files = Vec::new();
     let mut stats = GatherStats::default();
 
-    for entry in ignore::WalkBuilder::new(&root)
+    for entry in ignore::WalkBuilder::new(root)
         // standard_filters() turns on gitignore + .ignore + global ignore + hidden.
         // We then call hidden(false) to re-enable dotfile traversal — spec
         // excludes are how you drop .git/, not the walker.
@@ -82,10 +86,7 @@ pub(crate) fn gather(
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                stats.skipped_walk_error += 1;
-                if stats.walk_error_samples.len() < WALK_ERROR_SAMPLE_CAP {
-                    stats.walk_error_samples.push(e.to_string());
-                }
+                record_io_error(&mut stats, e.to_string());
                 continue;
             }
         };
@@ -93,7 +94,7 @@ pub(crate) fn gather(
             continue;
         }
         let abs = entry.path();
-        let Ok(rel) = abs.strip_prefix(&root) else {
+        let Ok(rel) = abs.strip_prefix(root) else {
             continue;
         };
         let rel_str = normalize(rel);
@@ -102,11 +103,15 @@ pub(crate) fn gather(
             continue;
         }
 
-        let Ok(meta) = std::fs::metadata(abs) else {
-            stats.skipped_walk_error += 1;
-            continue;
+        // Use the walker's cached metadata where available (saves a stat).
+        let len = match entry.metadata() {
+            Ok(m) => m.len(),
+            Err(e) => {
+                record_io_error(&mut stats, format!("{}: {e}", abs.display()));
+                continue;
+            }
         };
-        if meta.len() > MAX_FILE_BYTES {
+        if len > MAX_FILE_BYTES {
             stats.skipped_too_large += 1;
             continue;
         }
@@ -150,27 +155,34 @@ impl CompiledScope {
         let included = self
             .include
             .iter()
-            .any(|p| p.matches_with(rel_path, glob_opts()));
+            .any(|p| p.matches_with(rel_path, GLOB_OPTS));
         if !included {
             return false;
         }
-        !self
-            .exclude
-            .iter()
-            .any(|p| p.matches_with(rel_path, glob_opts()))
+        !self.exclude.iter().any(|p| p.matches_with(rel_path, GLOB_OPTS))
     }
 }
 
-/// Use gitignore-style separator semantics: `*` does NOT cross `/`, but
-/// `**` does. So `src/*.rs` matches `src/foo.rs` only (not `src/sub/foo.rs`),
-/// and `**/*` matches files at any depth. Diverging from the glob crate's
-/// default (which lets `*` cross `/`) so spec authors get the rule they
-/// expect from gitignore / ripgrep / fd.
-fn glob_opts() -> glob::MatchOptions {
-    glob::MatchOptions {
-        case_sensitive: true,
-        require_literal_separator: true,
-        require_literal_leading_dot: false,
+/// Gitignore-style separator semantics: `*` does NOT cross `/`, `**` does.
+/// `src/*.rs` matches `src/foo.rs` only; `**/*` matches files at any depth.
+/// Diverges from the glob crate's default so spec authors get the rule
+/// they expect from gitignore / ripgrep / fd.
+const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
+    case_sensitive: true,
+    require_literal_separator: true,
+    require_literal_leading_dot: false,
+};
+
+/// Excludes applied when a spec doesn't declare its own scope. Just enough
+/// to keep the worst footguns (`.git/`, `node_modules/`, `target/`) out of
+/// the prompt — specs SHOULD declare their own scope, but if they don't,
+/// we shouldn't ship `.git/objects/` to the LLM.
+const FALLBACK_EXCLUDES: &[&str] = &[".git/**", "node_modules/**", "target/**"];
+
+fn record_io_error(stats: &mut GatherStats, msg: String) {
+    stats.skipped_io_error += 1;
+    if stats.io_error_samples.len() < IO_ERROR_SAMPLE_CAP {
+        stats.io_error_samples.push(msg);
     }
 }
 
@@ -193,7 +205,10 @@ fn effective_scope(spec: &Spec, scope_override: Option<&str>) -> Result<Compiled
             },
             scope.exclude.clone(),
         ),
-        (None, None) => (vec!["**/*".to_string()], Vec::new()),
+        (None, None) => (
+            vec!["**/*".to_string()],
+            FALLBACK_EXCLUDES.iter().map(|s| s.to_string()).collect(),
+        ),
     };
 
     let include = compile_globs(&include_patterns).context("compiling include globs")?;
@@ -358,6 +373,26 @@ mod tests {
         assert!(paths.contains(&"src/text.rs"));
         assert!(!paths.contains(&"data.bin"));
         assert_eq!(res.stats.skipped_binary, 1);
+    }
+
+    #[test]
+    fn fallback_excludes_drop_git_dir_when_spec_omits_scope() {
+        let tmp = tempdir().unwrap();
+        init_git(tmp.path()); // creates .git/
+        write(&tmp.path().join("src/lib.rs"), "fn x() {}");
+        let subject = make_subject(tmp.path());
+        // Spec with NO default_scope at all — exercises the (None, None)
+        // branch in effective_scope which now ships fallback excludes.
+        let spec = parse_spec(
+            "---\nname: t\nmode: trusted\nkind: prompt\n---\n",
+        );
+        let res = gather(&subject, &spec, None).unwrap();
+        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"src/lib.rs"));
+        assert!(
+            !paths.iter().any(|p| p.starts_with(".git/")),
+            "fallback excludes should drop .git/, got: {paths:?}"
+        );
     }
 
     #[test]
