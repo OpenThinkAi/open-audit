@@ -7,9 +7,11 @@
 //! is deferred; for now we error if the bundle is implausibly large.
 //!
 //! Skips are counted in the returned `GatherStats` so the CLI layer can
-//! surface them to the user before the verdict ("skipped 12 files: 3 too
-//! large, 9 binary"). Audit results that silently ignored half the repo
-//! aren't useful results.
+//! eventually surface them to the user before the verdict ("skipped 12
+//! files: 3 too large, 9 binary"). The infrastructure ships here; the CLI
+//! presentation is wired up in the run/output module (chunk E in v1).
+//! Audit results that silently ignore half the repo aren't useful results
+//! — `GatherStats` exists so we don't ship that case.
 
 use anyhow::{Context, Result, bail};
 use glob::Pattern;
@@ -36,7 +38,13 @@ pub(crate) struct GatherStats {
     pub skipped_too_large: u32,
     pub skipped_binary: u32,
     pub skipped_walk_error: u32,
+    /// First few walk-error messages captured so the user has something
+    /// to act on when `skipped_walk_error > 0`. Cap is small on purpose —
+    /// we want a sample, not a flood.
+    pub walk_error_samples: Vec<String>,
 }
+
+const WALK_ERROR_SAMPLE_CAP: usize = 5;
 
 #[derive(Debug)]
 pub(crate) struct EvidenceChunk {
@@ -71,9 +79,11 @@ pub(crate) fn gather(
     {
         let entry = match entry {
             Ok(e) => e,
-            Err(_) => {
-                // Permission errors etc. — count and continue.
+            Err(e) => {
                 stats.skipped_walk_error += 1;
+                if stats.walk_error_samples.len() < WALK_ERROR_SAMPLE_CAP {
+                    stats.walk_error_samples.push(e.to_string());
+                }
                 continue;
             }
         };
@@ -113,7 +123,9 @@ pub(crate) fn gather(
 
     if files.is_empty() {
         bail!(
-            "no files matched the spec scope under {}.\n  Check the spec's default_scope or pass --scope.",
+            "no files matched after applying include patterns AND spec excludes under {}.\n  \
+             Both default_scope.include + default_scope.exclude (and --scope, if passed) are in play. \
+             Check that the includes cover the right files AND that no exclude pattern is clobbering them.",
             root.display()
         );
     }

@@ -24,9 +24,10 @@ pub enum Command {
         #[arg(long)]
         against: Option<String>,
 
-        /// Glob to limit which files are audited. Replaces the spec's
-        /// include list, but the spec's exclude list is preserved
-        /// (so safety excludes like `target/**` still apply).
+        /// Single glob to limit which files are audited. Replaces the
+        /// spec's include list, but the spec's exclude list is preserved
+        /// (so safety excludes like `target/**` still apply). Multi-glob
+        /// limiting is not supported — use a custom spec file for that.
         #[arg(long)]
         scope: Option<String>,
 
