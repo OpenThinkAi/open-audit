@@ -85,6 +85,9 @@ async function main() {
       data: req.data ?? {},
       viewsRoot,
       title: req.title,
+      // port: 0 → let OS pick a free port. Lets concurrent oaudit invocations
+      // coexist instead of colliding on ui-leaf's default 5810.
+      port: 0,
     });
   } catch (e) {
     emit({ type: "error", message: `mount() failed: ${e.message}` });

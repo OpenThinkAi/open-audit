@@ -116,12 +116,56 @@ the bridge-pattern docs as something to lower.
 
 ### 6. The CLI binary stub
 
-`stamp --version` works fine and `stamp --help` lists commands, but
+`ui-leaf --version` works fine and `ui-leaf --help` lists commands, but
 `ui-leaf` (when installed as a binary) is *only* a stub — `ui-leaf mount`
 prints help and exits. We mention this to set expectations: if a non-Node
 user `npm install -g ui-leaf` and tries `ui-leaf mount`, they get help
 output, not a working command. The README does say "the Node SDK is
 functional"; could be more explicit about the binary status.
+
+### 7. ui-leaf's own stderr noise dominates the consumer's status output
+
+After workaround #1 redirects stdout-writes to stderr, the consumer sees
+on stderr (in this order, on every `--open` invocation):
+
+```
+  ➜  Local:    http://127.0.0.1:5810/
+
+start   build started...
+warn    [rsbuild] `dev.setupMiddlewares` is deprecated, use `server.setup` instead
+ready   built in 0.08 s
+```
+
+…interleaved with the consumer's own `eprintln!("oaudit: view ready at
+{url} (close the tab to exit)")`. The user's actionable line is buried
+in build-tool noise on the very first run.
+
+This is closely tied to #1 (the lack of a `silent:` option). The same fix
+helps both — a `silent: true` MountOption that suppresses ui-leaf's banner,
+the rsbuild lifecycle messages, *and* the deprecation warning would let
+consumers present a clean output by default and opt into verbosity.
+
+We did NOT work around this in the Rust caller, per Matt's instruction:
+"if it's clearly ui-leaf's missing piece rather than your problem to solve,
+report it back rather than working around it. The friction is the data."
+
+### 8. `port: 5810` default collides on concurrent invocations
+
+ui-leaf's `MountOptions.port` defaults to `5810`. Two simultaneous
+`oaudit explain X --open` invocations would have the second one fail —
+ui-leaf documents that it auto-bumps to the next free port, but the bridge
+was passing the default explicitly so there was nothing to bump.
+
+**Workaround:** the bridge now passes `port: 0` to let the OS pick a free
+port. ui-leaf reflects the bound port in `mount()`'s return value, which
+the bridge re-emits as `{"type":"ready","url":...,"port":...}`. Works
+cleanly.
+
+This isn't ui-leaf's fault — `port: 0` is the standard Node-ecosystem way
+to ask for "any free port" and ui-leaf supports it correctly. Worth
+documenting in the README that programmatic consumers should pass `port: 0`
+unless they specifically need a stable URL; the default `5810` is more for
+human-direct-use.
 
 ## What worked well (positive signal)
 
@@ -158,12 +202,15 @@ functional"; could be more explicit about the binary status.
 ## Tally
 
 - 1 blocking issue (stdout collision; worked around with monkey-patch)
-- 4 design / UX issues (silent option, language-neutral binary, viewsRoot
-  default, deprecation warning, lifecycle docs, binary stub clarity)
+- 5 design / UX issues (silent option, language-neutral binary, viewsRoot
+  default, deprecation warning, lifecycle docs, binary stub clarity,
+  stderr noise dominating consumer output)
+- 1 issue with a clean consumer-side workaround (port: 0 for concurrency)
 - 0 issues we couldn't work around
-- ~30 min from `npm install` to working bridge end-to-end
+- ~45 min from `npm install` to working bridge end-to-end (including
+  iterating on stdout-redirect and concurrent-invocation handling)
 
-The stdout one is the only place a user will *fail* without working it out —
-everything else is just friction the bridge author absorbs. Worth fixing
-either with `silent:` or with the language-neutral binary (which you'd
-write to be quiet by default anyway).
+A `silent: true` MountOption would address #1 + #7 (the two highest-impact
+items) in one stroke. Combined with the language-neutral binary on the
+roadmap, that would let a Rust/Go/Python consumer have a clean integration
+in well under an hour.
