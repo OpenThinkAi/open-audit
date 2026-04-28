@@ -80,7 +80,7 @@ jobs:
         if: steps.check_npm.outputs.published == 'false'
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,x86_64-unknown-linux-musl
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,x86_64-unknown-linux-gnu,x86_64-unknown-linux-musl
 
       - name: install zig + cargo-zigbuild + cargo-dist
         if: steps.check_npm.outputs.published == 'false'
