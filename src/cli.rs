@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::render;
@@ -107,8 +108,7 @@ async fn explain(spec: &str, open: bool) -> Result<()> {
 fn list_specs() -> Result<()> {
     let cwd = std::env::current_dir()?;
     let local = resolve::list_local(&cwd);
-    let local_paths: std::collections::HashSet<&str> =
-        local.iter().map(|(p, _)| p.as_str()).collect();
+    let local_paths: HashSet<&str> = local.iter().map(|(p, _)| p.as_str()).collect();
 
     let mut builtins: Vec<&crate::builtins::Builtin> = crate::builtins::all().iter().collect();
     builtins.sort_by_key(|b| b.catalog_path);
@@ -127,18 +127,18 @@ fn list_specs() -> Result<()> {
         println!();
         println!("(no repo-local specs at .oaudit/auditors/ — `oaudit init` scaffolds it)");
     } else {
-        let builtin_paths: std::collections::HashSet<&str> =
+        let builtin_paths: HashSet<&str> =
             crate::builtins::all().iter().map(|b| b.catalog_path).collect();
         println!();
         println!("repo-local specs (use `oaudit explain <mode>/<name>` to view):");
         for (catalog, path) in &local {
             let rel = path.strip_prefix(&cwd).unwrap_or(path);
             let suffix = if builtin_paths.contains(catalog.as_str()) {
-                ", overrides built-in"
+                "  (overrides built-in)"
             } else {
                 ""
             };
-            println!("  {}  ({}{})", catalog, rel.display(), suffix);
+            println!("  {}  ({}){}", catalog, rel.display(), suffix);
         }
     }
     Ok(())

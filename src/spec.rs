@@ -13,6 +13,20 @@ pub enum Mode {
     Untrusted,
 }
 
+impl Mode {
+    /// Single source of truth for "which modes exist." Adding a Mode
+    /// variant requires extending this slice — the compiler doesn't enforce
+    /// that, so a debug_assert in tests pins the relationship.
+    pub const ALL: &'static [Mode] = &[Mode::Trusted, Mode::Untrusted];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Trusted => "trusted",
+            Mode::Untrusted => "untrusted",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
