@@ -33,15 +33,21 @@ jobs:
 
       - name: read version from Cargo.toml
         id: version
+        # Use cargo metadata so this stays correct if the crate ever
+        # becomes a workspace (grep + head would silently pick the wrong
+        # version). jq selects the open-audit package by name, not by
+        # array position.
         run: |
-          VERSION=$(grep -E '^version = "' Cargo.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ -z "$VERSION" ]; then
-            echo "could not parse version from Cargo.toml" >&2
+          VERSION=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name == "open-audit") | .version')
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "could not read open-audit version via cargo metadata" >&2
+            echo "expected a [package] block in Cargo.toml with name = \"open-audit\"" >&2
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Cargo.toml version: $VERSION"
+          echo "open-audit version: $VERSION"
 
       - name: check if tag exists
         id: check

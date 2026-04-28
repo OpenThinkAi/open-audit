@@ -31,11 +31,38 @@ handles the rest.
 
 ## Bootstrap (one-time, two pieces)
 
-### 1. npm package bootstrap
+### 1. npm package + Trusted Publisher
 
 OIDC Trusted Publishing requires the npm package to exist before it can
 trust a workflow. So the very first publish has to happen with an npm
-auth token, locally. After that, CI takes over.
+auth token, locally. Once the package exists and the Trusted Publisher
+is configured, CI publishes from then on without any token.
+
+```sh
+# Make sure cargo and dist are installed
+brew install cargo-dist cargo-zigbuild zig
+
+# Verify the local build is clean
+cargo test
+dist plan                   # prints what would be built/published
+
+# Bump version in Cargo.toml (e.g., 0.1.0)
+
+# Build artifacts locally
+dist build --artifacts=all
+
+# Publish the npm wrapper to claim the name (you'll be prompted for 2FA)
+npm publish --access public ./target/distrib/open-audit-npm-package.tar.gz
+
+# Configure Trusted Publishing on npm (one-time UI step):
+#   https://www.npmjs.com/package/open-audit/access
+#     → Trusted Publishers → Add publisher
+#     → repository:  OpenThinkAi/open-audit
+#     → workflow:    release.yml
+#     → environment: (leave blank)
+```
+
+After the Trusted Publisher is configured, you never publish manually again.
 
 ### 2. RELEASE_PAT secret for auto-tag
 
@@ -64,36 +91,6 @@ auto-tag will create the tag but `release.yml` will never fire.
 5. Save
 
 That's it. Auto-tag uses it on the next push to main. Rotate yearly.
-
-### 3. The very first npm publish (only run once, ever)
-
-```sh
-# 1. Make sure cargo and dist are installed
-brew install cargo-dist     # provides the `dist` binary
-
-# 2. Verify the local build is clean
-cargo test
-dist plan                   # prints what would be built/published
-
-# 3. Bump version in Cargo.toml (e.g., 0.1.0)
-
-# 4. Build artifacts locally (optional sanity check)
-dist build --artifacts=all
-
-# 5. Manually publish the npm wrapper to claim the name.
-#    The wrapper tarball is in ./target/distrib/ after `dist build`.
-npm config set //registry.npmjs.org/:_authToken $NPM_TOKEN
-npm publish --access public ./target/distrib/open-audit-npm-package.tar.gz
-
-# 6. Configure Trusted Publishing on npm:
-#    https://www.npmjs.com/package/open-audit/access
-#      → Trusted Publishers → Add publisher
-#      → repository:  OpenThinkAi/open-audit
-#      → workflow:    .github/workflows/release.yml
-#      → environment: (leave blank)
-```
-
-After step 6, you never publish manually again.
 
 ## Cutting a release (recurring — the whole flow)
 
