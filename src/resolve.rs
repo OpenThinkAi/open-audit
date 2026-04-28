@@ -63,10 +63,23 @@ pub fn resolve_one(token: &str, repo_root: &Path) -> Result<Spec> {
     )
 }
 
+/// Catalog tokens are `<mode>/<name>` where mode is one of the known
+/// modes. Keeping this in lockstep with `list_local`'s mode iteration
+/// (and the `Mode` enum in spec.rs) so "what you can resolve" and
+/// "what list shows" don't disagree.
 fn looks_like_catalog(token: &str) -> bool {
-    // Exactly one slash, no dots, no leading `./` or `~`.
-    token.matches('/').count() == 1 && !token.contains('.')
+    match token.split_once('/') {
+        Some((mode, name)) => {
+            !name.is_empty()
+                && !name.contains('/')
+                && !name.contains('.')
+                && KNOWN_MODES.contains(&mode)
+        }
+        None => false,
+    }
 }
+
+const KNOWN_MODES: &[&str] = &["trusted", "untrusted"];
 
 fn try_local_catalog(token: &str, repo_root: &Path) -> Result<Option<Spec>> {
     let path = repo_root

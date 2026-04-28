@@ -95,13 +95,27 @@ async fn explain(spec: &str, open: bool) -> Result<()> {
     let resolved = resolve::resolve_one(spec, &cwd)?;
     let label = source_label(&resolved.source);
 
+    // Render the full file (frontmatter + body) so `explain` matches its
+    // help text ("full content"). resolve_one gave us body-only via spec
+    // parsing — read the raw file for the original to preserve frontmatter.
+    let full = match &resolved.source {
+        SpecSource::Builtin(catalog) => crate::builtins::all()
+            .iter()
+            .find(|b| b.catalog_path == *catalog)
+            .map(|b| b.body.to_string())
+            .unwrap_or(resolved.body),
+        SpecSource::Local(p) | SpecSource::AdHoc(p) => {
+            std::fs::read_to_string(p).unwrap_or(resolved.body)
+        }
+    };
+
     if open {
-        render::render_spec(&resolved.body, Some(&label)).await
-    } else if resolved.body.ends_with('\n') {
-        print!("{}", resolved.body);
+        render::render_spec(&full, Some(&label)).await
+    } else if full.ends_with('\n') {
+        print!("{full}");
         Ok(())
     } else {
-        println!("{}", resolved.body);
+        println!("{full}");
         Ok(())
     }
 }
@@ -112,8 +126,11 @@ fn list_specs() -> Result<()> {
     let local_paths: std::collections::HashSet<&str> =
         local.iter().map(|(p, _)| p.as_str()).collect();
 
+    let mut builtins: Vec<&crate::builtins::Builtin> = crate::builtins::all().iter().collect();
+    builtins.sort_by_key(|b| b.catalog_path);
+
     println!("built-in specs (use `oaudit explain <mode>/<name>` to view):");
-    for b in crate::builtins::all() {
+    for b in builtins {
         let suffix = if local_paths.contains(b.catalog_path) {
             "  (overridden by local)"
         } else {
@@ -122,7 +139,10 @@ fn list_specs() -> Result<()> {
         println!("  {}{}", b.catalog_path, suffix);
     }
 
-    if !local.is_empty() {
+    if local.is_empty() {
+        println!();
+        println!("(no repo-local specs at .oaudit/auditors/ — `oaudit init` scaffolds it)");
+    } else {
         println!();
         println!("repo-local specs (use `oaudit explain <mode>/<name>` to view):");
         for (catalog, path) in &local {
@@ -136,7 +156,7 @@ fn list_specs() -> Result<()> {
 fn source_label(source: &SpecSource) -> String {
     match source {
         SpecSource::Builtin(catalog) => format!("builtin: {catalog}"),
-        SpecSource::Local(p) | SpecSource::AdHoc(p) => p.display().to_string(),
+        SpecSource::Local(p) => format!("local: {}", p.display()),
+        SpecSource::AdHoc(p) => p.display().to_string(),
     }
 }
-
