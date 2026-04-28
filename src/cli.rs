@@ -56,6 +56,8 @@ pub enum Command {
         spec: String,
 
         /// Open the spec in a browser instead of printing to stdout.
+        /// (Dev builds only in v1 — needs Node + bridges/ui-leaf/. Release
+        /// builds error with a hint pointing at OAUDIT_UI_BRIDGE.)
         #[arg(long)]
         open: bool,
     },

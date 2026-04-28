@@ -72,6 +72,10 @@ pub async fn render_spec(markdown: &str, title: Option<&str>) -> Result<()> {
         .spawn()
         .with_context(|| format!("spawning `node {}`", bridge.display()))?;
 
+    // `title` is duplicated by design: top-level goes to mount({ title }) for
+    // the browser tab title; data.title is consumed by views/spec.tsx for the
+    // header. ui-leaf 0.1.3 doesn't honor mount({ title }) yet (FRICTION #5);
+    // we send both so this works the moment they wire it through.
     let req = BridgeRequest {
         view: "spec",
         data: BridgeData { markdown, title },
