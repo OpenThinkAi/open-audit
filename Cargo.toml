@@ -59,6 +59,11 @@ glob = "0.3"
 
 # git
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+# git2 → libz-sys for compression. Force libz-sys to bundle zlib statically
+# so cross-compile via cargo-zigbuild (notably aarch64-unknown-linux-gnu)
+# can find zlib instead of failing with "unable to find dynamic system
+# library 'z'". Slightly larger binary; works everywhere.
+libz-sys = { version = "1", default-features = false, features = ["static"] }
 
 # misc
 tempfile = "3"
