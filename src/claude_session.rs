@@ -94,11 +94,19 @@ pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Res
     match result {
         Ok(text) => Ok(text),
         Err(e) => {
+            // claude can emit a non-success result event AND exit 0 (the
+            // event itself is the error signal). In that case status is
+            // fine but stderr is the most useful diagnostic we have, so
+            // surface it whenever it isn't empty — not only on non-zero
+            // exit. Keeps our "check stderr for details" promise honest.
+            let stderr_trimmed = stderr_text.trim();
             if !status.success() {
                 bail!(
-                    "claude exited with {status}.\n  stderr: {}\n  parse: {e:#}",
-                    stderr_text.trim()
+                    "claude exited with {status}.\n  stderr: {stderr_trimmed}\n  parse: {e:#}",
                 );
+            }
+            if !stderr_trimmed.is_empty() {
+                bail!("{e:#}\n  stderr: {stderr_trimmed}");
             }
             Err(e)
         }
