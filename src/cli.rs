@@ -77,7 +77,7 @@ pub enum Format {
     Human,
 }
 
-pub async fn dispatch(cli: Cli) -> Result<()> {
+pub async fn dispatch(cli: Cli) -> Result<u8> {
     match cli.command {
         Command::Repo { target, against, scope, format } => {
             audit_repo(&target, against.as_deref(), scope.as_deref(), format).await
@@ -86,9 +86,9 @@ pub async fn dispatch(cli: Cli) -> Result<()> {
             let _ = (target, against, scope, format);
             bail!("file: not yet implemented");
         }
-        Command::List => list_specs(),
-        Command::Explain { spec, open } => explain(&spec, open).await,
-        Command::Init => crate::init::scaffold(std::env::current_dir()?).await,
+        Command::List => list_specs().map(|_| 0),
+        Command::Explain { spec, open } => explain(&spec, open).await.map(|_| 0),
+        Command::Init => crate::init::scaffold(std::env::current_dir()?).await.map(|_| 0),
     }
 }
 
@@ -97,7 +97,7 @@ async fn audit_repo(
     against: Option<&str>,
     scope: Option<&str>,
     format: Format,
-) -> Result<()> {
+) -> Result<u8> {
     let against = against.unwrap_or("untrusted/security");
     let cwd = std::env::current_dir()?;
     let specs = resolve::resolve(against, &cwd)?;
@@ -107,11 +107,7 @@ async fn audit_repo(
     let outcome = crate::run::run(&subject, &specs, scope).await?;
     crate::output::emit(&outcome.report, &outcome.stats, format)?;
 
-    let code = crate::output::exit_code(&outcome.report);
-    if code != 0 {
-        std::process::exit(code);
-    }
-    Ok(())
+    Ok(crate::output::exit_code(&outcome.report) as u8)
 }
 
 async fn explain(spec: &str, open: bool) -> Result<()> {

@@ -162,8 +162,8 @@ fn has_skips(stats: &GatherStats) -> bool {
 
 /// Determine the process exit code from the report. v1 rule: any
 /// `high` or `critical` finding closes the gate (exit 1). Otherwise
-/// exit 0. Tool errors get exit 2 from the caller.
-pub(crate) fn exit_code(report: &AuditReport) -> i32 {
+/// exit 0. Tool errors get exit 2 from main.
+pub(crate) fn exit_code(report: &AuditReport) -> u8 {
     let any_blocking = report
         .findings
         .iter()

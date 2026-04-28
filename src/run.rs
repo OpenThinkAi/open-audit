@@ -45,9 +45,16 @@ pub(crate) async fn run(
         specs_run.push(spec_label);
     }
 
-    // Dedup by id (last write wins). Specs sometimes return overlapping
-    // findings (e.g., security + supply-chain both flag the same issue);
-    // keeping the later one is fine — the user gets one entry, not two.
+    // Dedup by id. Specs sometimes return overlapping findings
+    // (security + supply-chain both flagging the same issue, etc.). We
+    // keep the FIRST one in iteration order, which is the spec listed
+    // first in --against — the user picked the order, so honor it. The
+    // dropped finding's `spec` attribution is lost; cross-spec
+    // attribution would need a different aggregation shape.
+    //
+    // sort_by is stable, so within an equal-id run the original
+    // (earlier-spec-first) order is preserved; Vec::dedup_by then drops
+    // every later element of the run.
     all_findings.sort_by(|a, b| a.id.cmp(&b.id));
     all_findings.dedup_by(|a, b| a.id == b.id);
 
