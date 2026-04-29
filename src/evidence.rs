@@ -75,7 +75,17 @@ pub(crate) fn gather(
     // exactly one file and said "audit it" — gather should give them
     // exactly that file. Avoids the empty-rel-path corner of WalkBuilder
     // where the walk root and the only entry are the same path.
+    //
+    // --scope is meaningless here (there's nothing to filter against)
+    // and silently ignoring it would surprise users who passed it as a
+    // safety filter. Loud-fail instead.
     if root.is_file() {
+        if scope_override.is_some() {
+            bail!(
+                "--scope has no effect when the target is a single file. \
+                 Remove --scope, or pass a directory instead."
+            );
+        }
         return single_file_chunk(root);
     }
 
@@ -207,10 +217,12 @@ fn single_file_chunk(path: &std::path::Path) -> Result<GatherResult> {
             path.display()
         )
     })?;
+    // canonicalize() above guarantees file_name() is Some; to_str() only
+    // fails on non-UTF8 filenames, which we treat as out-of-scope for v1.
     let rel = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("")
+        .with_context(|| format!("file name {} is not valid UTF-8", path.display()))?
         .to_string();
     Ok(GatherResult {
         chunks: vec![EvidenceChunk {
@@ -443,7 +455,6 @@ mod tests {
         write(&path, "fn x() {}");
         let subject = Subject::File(crate::subject::file::File {
             root: path.clone(),
-            is_dir: false,
         });
         let spec = parse_spec(
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*.tsx\"]\n  exclude: []\n---\n",
@@ -458,6 +469,19 @@ mod tests {
     }
 
     #[test]
+    fn single_file_subject_rejects_scope_override() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("foo.rs");
+        write(&path, "fn x() {}");
+        let subject = Subject::File(crate::subject::file::File { root: path });
+        let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
+        let err = gather(&subject, &spec, Some("**/*.tsx")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("--scope"), "got: {msg}");
+        assert!(msg.contains("single file"), "got: {msg}");
+    }
+
+    #[test]
     fn single_file_subject_rejects_oversize() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("big.txt");
@@ -465,7 +489,6 @@ mod tests {
         write(&path, &big);
         let subject = Subject::File(crate::subject::file::File {
             root: path,
-            is_dir: false,
         });
         let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
         let err = gather(&subject, &spec, None).unwrap_err();
@@ -479,7 +502,6 @@ mod tests {
         std::fs::write(&path, [0xff, 0xfe, 0x00, 0x01]).unwrap();
         let subject = Subject::File(crate::subject::file::File {
             root: path,
-            is_dir: false,
         });
         let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
         let err = gather(&subject, &spec, None).unwrap_err();

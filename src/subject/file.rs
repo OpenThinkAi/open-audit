@@ -2,9 +2,9 @@
 //!
 //! Distinct from `Repo` because there's no git history to read and no
 //! worktree-discovery walk: the path the user passed IS the root.
-//! `ignore::WalkBuilder` accepts a file as the walk root and yields just
-//! that file as a single entry, so `evidence::gather` works against
-//! either shape with no special-casing.
+//! `evidence::gather` special-cases a single-file root (skips the
+//! WalkBuilder + scope filtering entirely); a directory root walks
+//! normally with no `.gitignore` integration.
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 pub struct File {
     pub root: PathBuf,
-    pub is_dir: bool,
 }
 
 pub(crate) async fn open(target: &Path) -> Result<File> {
@@ -32,10 +31,10 @@ pub(crate) async fn open(target: &Path) -> Result<File> {
         );
     }
 
-    Ok(File {
-        root: canonical,
-        is_dir: meta.is_dir(),
-    })
+    // is_dir vs is_file is determined downstream by re-stating the path
+    // (see evidence::gather) — storing it here would require keeping
+    // it in sync if the path is touched between open and gather.
+    Ok(File { root: canonical })
 }
 
 #[cfg(test)]
@@ -47,8 +46,8 @@ mod tests {
     async fn opens_a_directory() {
         let tmp = tempdir().unwrap();
         let f = open(tmp.path()).await.unwrap();
-        assert!(f.is_dir);
         assert_eq!(f.root.canonicalize().unwrap(), tmp.path().canonicalize().unwrap());
+        assert!(f.root.is_dir());
     }
 
     #[tokio::test]
@@ -57,8 +56,8 @@ mod tests {
         let path = tmp.path().join("a.rs");
         std::fs::write(&path, "fn x() {}").unwrap();
         let f = open(&path).await.unwrap();
-        assert!(!f.is_dir);
         assert_eq!(f.root, path.canonicalize().unwrap());
+        assert!(f.root.is_file());
     }
 
     #[tokio::test]

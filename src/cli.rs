@@ -116,7 +116,7 @@ async fn audit_repo(
 }
 
 async fn audit_file(
-    target: &PathBuf,
+    target: &std::path::Path,
     against: &str,
     scope: Option<&str>,
     format: Format,
