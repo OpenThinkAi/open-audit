@@ -24,8 +24,10 @@ pub(crate) async fn open(target: &Path) -> Result<File> {
         .with_context(|| format!("reading metadata for {}", canonical.display()))?;
 
     if !meta.is_file() && !meta.is_dir() {
+        // canonicalize() above already weeded out broken symlinks. This
+        // branch only fires for special files (sockets, FIFOs, devices).
         bail!(
-            "`{}` is neither a file nor a directory (symlink-to-nowhere, special file, etc.)",
+            "`{}` is neither a file nor a directory (special file?)",
             target.display()
         );
     }

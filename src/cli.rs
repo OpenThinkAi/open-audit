@@ -40,7 +40,8 @@ pub enum Command {
 
     /// Audit a single file or non-git directory.
     File {
-        /// Path to file or directory.
+        /// Path to a single file or a non-git directory. (For git
+        /// repositories use `oaudit repo` to enable git-history evidence.)
         target: PathBuf,
 
         /// Comma-separated specs to audit against
