@@ -70,6 +70,25 @@ pub(crate) fn gather(
     scope_override: Option<&str>,
 ) -> Result<GatherResult> {
     let root = subject.root();
+
+    // Single-file subject: no walk, no scope filter. The user pointed at
+    // exactly one file and said "audit it" — gather should give them
+    // exactly that file. Avoids the empty-rel-path corner of WalkBuilder
+    // where the walk root and the only entry are the same path.
+    //
+    // --scope is meaningless here (there's nothing to filter against)
+    // and silently ignoring it would surprise users who passed it as a
+    // safety filter. Loud-fail instead.
+    if root.is_file() {
+        if scope_override.is_some() {
+            bail!(
+                "--scope has no effect when the target is a single file. \
+                 Remove --scope, or pass a directory instead."
+            );
+        }
+        return single_file_chunk(root);
+    }
+
     let scope = effective_scope(spec, scope_override)?;
 
     let mut files = Vec::new();
@@ -178,6 +197,40 @@ const GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
 /// the prompt — specs SHOULD declare their own scope, but if they don't,
 /// we shouldn't ship `.git/objects/` to the LLM.
 const FALLBACK_EXCLUDES: &[&str] = &[".git/**", "node_modules/**", "target/**"];
+
+/// Build a single-file `GatherResult` directly. Skip the WalkBuilder /
+/// scope-glob path entirely; the user pointed at exactly one file.
+fn single_file_chunk(path: &std::path::Path) -> Result<GatherResult> {
+    let meta = std::fs::metadata(path)
+        .with_context(|| format!("reading metadata for {}", path.display()))?;
+    if meta.len() > MAX_FILE_BYTES {
+        bail!(
+            "{} is {} bytes — over the {} byte per-file limit. Pass a smaller file.",
+            path.display(),
+            meta.len(),
+            MAX_FILE_BYTES
+        );
+    }
+    let content = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "reading {} as UTF-8 (binary files aren't supported as a single-file subject)",
+            path.display()
+        )
+    })?;
+    // canonicalize() above guarantees file_name() is Some; to_str() only
+    // fails on non-UTF8 filenames, which we treat as out-of-scope for v1.
+    let rel = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .with_context(|| format!("file name {} is not valid UTF-8", path.display()))?
+        .to_string();
+    Ok(GatherResult {
+        chunks: vec![EvidenceChunk {
+            files: vec![EvidenceFile { path: rel, content }],
+        }],
+        stats: GatherStats::default(),
+    })
+}
 
 fn record_io_error(stats: &mut GatherStats, msg: String) {
     stats.skipped_io_error += 1;
@@ -393,6 +446,67 @@ mod tests {
             !paths.iter().any(|p| p.starts_with(".git/")),
             "fallback excludes should drop .git/, got: {paths:?}"
         );
+    }
+
+    #[test]
+    fn single_file_subject_includes_the_file() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("foo.rs");
+        write(&path, "fn x() {}");
+        let subject = Subject::File(crate::subject::file::File {
+            root: path.clone(),
+        });
+        let spec = parse_spec(
+            "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*.tsx\"]\n  exclude: []\n---\n",
+        );
+        // Even though the spec scope wouldn't match a `.rs` file under
+        // a directory walk, single-file mode bypasses scope entirely.
+        let res = gather(&subject, &spec, None).unwrap();
+        assert_eq!(res.chunks.len(), 1);
+        assert_eq!(res.chunks[0].files.len(), 1);
+        assert_eq!(res.chunks[0].files[0].path, "foo.rs");
+        assert_eq!(res.chunks[0].files[0].content, "fn x() {}");
+    }
+
+    #[test]
+    fn single_file_subject_rejects_scope_override() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("foo.rs");
+        write(&path, "fn x() {}");
+        let subject = Subject::File(crate::subject::file::File { root: path });
+        let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
+        let err = gather(&subject, &spec, Some("**/*.tsx")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("--scope"), "got: {msg}");
+        assert!(msg.contains("single file"), "got: {msg}");
+    }
+
+    #[test]
+    fn single_file_subject_rejects_oversize() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("big.txt");
+        let big = "x".repeat((MAX_FILE_BYTES + 1024) as usize);
+        write(&path, &big);
+        let subject = Subject::File(crate::subject::file::File {
+            root: path,
+        });
+        let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
+        let err = gather(&subject, &spec, None).unwrap_err();
+        assert!(err.to_string().contains("over the"), "got: {err}");
+    }
+
+    #[test]
+    fn single_file_subject_rejects_binary() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("bin.dat");
+        std::fs::write(&path, [0xff, 0xfe, 0x00, 0x01]).unwrap();
+        let subject = Subject::File(crate::subject::file::File {
+            root: path,
+        });
+        let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
+        let err = gather(&subject, &spec, None).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("UTF-8"), "got: {msg}");
     }
 
     #[test]

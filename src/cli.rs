@@ -40,17 +40,24 @@ pub enum Command {
 
     /// Audit a single file or non-git directory.
     File {
-        /// Path to file or directory.
+        /// Path to a single file or a non-git directory. (For git
+        /// repositories use `oaudit repo` to enable git-history evidence.)
         target: PathBuf,
 
-        /// Comma-separated specs to audit against. Default treats the
-        /// subject as untrusted third-party code.
+        /// Comma-separated specs to audit against
+        /// (e.g. `untrusted/security,trusted/supply-chain` or `./my.md`).
+        /// The default treats the subject as untrusted third-party code.
         #[arg(long, default_value = "untrusted/security")]
         against: String,
 
+        /// Single glob to limit which files are audited. Replaces the
+        /// spec's include list, but the spec's exclude list is preserved
+        /// (so safety excludes like `target/**` still apply). Multi-glob
+        /// limiting is not supported — use a custom spec file for that.
         #[arg(long)]
         scope: Option<String>,
 
+        /// Output format.
         #[arg(long, value_enum, default_value_t = Format::Json)]
         format: Format,
     },
@@ -87,8 +94,7 @@ pub async fn dispatch(cli: Cli) -> Result<u8> {
             audit_repo(&target, &against, scope.as_deref(), format).await
         }
         Command::File { target, against, scope, format } => {
-            let _ = (target, against, scope, format);
-            bail!("file: not yet implemented");
+            audit_file(&target, &against, scope.as_deref(), format).await
         }
         Command::List => list_specs().map(|_| 0),
         Command::Explain { spec, open } => explain(&spec, open).await.map(|_| 0),
@@ -106,10 +112,30 @@ async fn audit_repo(
     let specs = resolve::resolve(against, &cwd)?;
     let repo = crate::subject::repo::open(target).await?;
     let subject = crate::subject::Subject::Repo(repo);
+    audit(&subject, &specs, scope, format).await
+}
 
-    let outcome = crate::run::run(&subject, &specs, scope).await?;
+async fn audit_file(
+    target: &std::path::Path,
+    against: &str,
+    scope: Option<&str>,
+    format: Format,
+) -> Result<u8> {
+    let cwd = std::env::current_dir()?;
+    let specs = resolve::resolve(against, &cwd)?;
+    let file = crate::subject::file::open(target).await?;
+    let subject = crate::subject::Subject::File(file);
+    audit(&subject, &specs, scope, format).await
+}
+
+async fn audit(
+    subject: &crate::subject::Subject,
+    specs: &[crate::spec::Spec],
+    scope: Option<&str>,
+    format: Format,
+) -> Result<u8> {
+    let outcome = crate::run::run(subject, specs, scope).await?;
     crate::output::emit(&outcome.report, &outcome.stats, format)?;
-
     Ok(crate::output::exit_code(&outcome.report))
 }
 
