@@ -68,6 +68,7 @@ libz-sys = { version = "1", default-features = false, features = ["static"] }
 # misc
 tempfile = "3"
 console = "0.16"
+indicatif = "0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

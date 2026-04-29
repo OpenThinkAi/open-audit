@@ -14,6 +14,8 @@ use crate::finding::{AuditReport, Finding};
 use crate::spec::{Spec, SpecSource};
 use crate::subject::Subject;
 use anyhow::{Context, Result, bail};
+use indicatif::{ProgressBar, ProgressStyle};
+use std::time::Duration;
 
 pub(crate) async fn run(
     subject: &Subject,
@@ -27,20 +29,29 @@ pub(crate) async fn run(
 
     for spec in specs {
         let spec_label = spec_label(spec);
+
+        let spinner = audit_spinner(&spec_label);
+        spinner.set_message(format!("{spec_label}: gathering evidence"));
         let gather = evidence::gather(subject, spec, scope_override)
             .with_context(|| format!("gathering evidence for {spec_label}"))?;
         merge_stats(&mut aggregate_stats, &gather.stats);
 
+        let file_count: usize = gather.chunks.iter().map(|c| c.files.len()).sum();
+        spinner.set_message(format!(
+            "{spec_label}: auditing ({file_count} files) — claude is working"
+        ));
         let prompt = build_user_prompt(&gather.chunks);
         let response = query_claude(&spec.body, &prompt)
             .await
             .with_context(|| format!("querying claude for {spec_label}"))?;
 
+        spinner.set_message(format!("{spec_label}: parsing findings"));
         let mut findings = parse_findings(&response)
             .with_context(|| format!("parsing findings from {spec_label}"))?;
         for f in &mut findings {
             f.spec = Some(spec_label.clone());
         }
+        spinner.finish_with_message(format!("{spec_label}: done ({} findings)", findings.len()));
         all_findings.extend(findings);
         specs_run.push(spec_label);
     }
@@ -74,6 +85,23 @@ fn spec_label(spec: &Spec) -> String {
         SpecSource::Builtin(catalog) => catalog.to_string(),
         SpecSource::Local(p) | SpecSource::AdHoc(p) => p.display().to_string(),
     }
+}
+
+/// Per-spec spinner. indicatif auto-detects non-TTY (CI, piped stdout)
+/// and renders nothing — `--format=json` consumers won't see corrupted
+/// output even though the spinner draws to stderr (separate from
+/// findings on stdout). 80ms tick is a balance: fast enough to feel
+/// alive, slow enough not to thrash a slow terminal.
+fn audit_spinner(label: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.cyan} {msg}")
+            .unwrap()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+    );
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb.set_message(label.to_string());
+    pb
 }
 
 fn merge_stats(into: &mut GatherStats, from: &GatherStats) {
