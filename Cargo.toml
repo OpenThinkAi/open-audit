@@ -41,7 +41,7 @@ allow-dirty = ["ci"]
 clap = { version = "4", features = ["derive"] }
 
 # async + process
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "fs", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "fs", "sync", "time"] }
 
 # error handling
 anyhow = "1"

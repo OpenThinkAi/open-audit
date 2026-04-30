@@ -11,8 +11,9 @@
 //! install-path is `$CARGO_HOME/bin`, which is the same directory as
 //! `cargo install`, so a `.cargo/bin/` substring can't distinguish the
 //! two. Users who installed via a package manager (Homebrew, apt, etc.)
-//! get a warning before the shell installer runs so they can ⌃C and
-//! use their package manager instead — see `run_shell_installer()`.
+//! get a warning before the shell installer runs so they can hit Ctrl+C
+//! and use their package manager instead — see `run_shell_installer()`.
+//! `--yes` skips the warning pause for CI / scripted updates.
 //!
 //! Windows hits an explicit bail: the cargo-dist `.sh` installer can't
 //! run there, and Windows binaries aren't shipped yet.
@@ -29,7 +30,7 @@ const INSTALLER_URL: &str =
 
 const RELEASES_URL: &str = "https://github.com/OpenThinkAi/open-audit/releases/latest";
 
-pub async fn run() -> Result<()> {
+pub(crate) async fn run(yes: bool) -> Result<()> {
     let exe = std::env::current_exe().context("locate current executable")?;
     let exe_str = exe.to_string_lossy();
 
@@ -45,7 +46,7 @@ pub async fn run() -> Result<()> {
              Reinstall manually from {RELEASES_URL}"
         )
     } else {
-        run_shell_installer(&exe_str).await
+        run_shell_installer(&exe_str, yes).await
     }
 }
 
@@ -70,24 +71,26 @@ async fn run_npm() -> Result<()> {
     Ok(())
 }
 
-async fn run_shell_installer(current_exe: &str) -> Result<()> {
+async fn run_shell_installer(current_exe: &str, yes: bool) -> Result<()> {
     // Heuristic: if the running binary lives somewhere a system or
     // user package manager typically owns (Homebrew, apt, etc.), the
     // shell installer would drop a second oaudit in `$CARGO_HOME/bin`
-    // and shadow it on PATH. Warn before doing it so the user can ⌃C
-    // and reinstall via the channel they actually use.
+    // and shadow it on PATH. Warn before doing it so the user can hit
+    // Ctrl+C and reinstall via the channel they actually use. `--yes`
+    // skips the pause (CI, scripted updates) but still emits the warning
+    // so the action stays auditable in logs.
     if looks_package_manager_owned(current_exe) {
         eprintln!(
             "oaudit: warning — this binary lives at {current_exe},\n\
              which looks package-manager-owned (Homebrew, apt, …).\n\
              The shell installer will write to $CARGO_HOME/bin and may shadow\n\
              your existing copy on PATH. If you installed via a package manager,\n\
-             ⌃C now and use that channel to update instead.\n\
-             (continuing in 5s)"
+             hit Ctrl+C now and use that channel to update instead."
         );
-        // Real interrupt window — without this, the warning above
-        // scrolls by while curl is already streaming.
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        if !yes {
+            eprintln!("(continuing in 5s — pass --yes to skip)");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
     }
 
     eprintln!("oaudit: running shell installer from {INSTALLER_URL}");
