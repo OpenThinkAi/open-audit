@@ -33,7 +33,7 @@ pub async fn run() -> Result<()> {
 }
 
 async fn run_npm() -> Result<()> {
-    eprintln!("oaudit: updating via npm…");
+    eprintln!("oaudit: running `npm install -g open-audit@latest`");
     let status = Command::new("npm")
         .args(["install", "-g", "open-audit@latest"])
         .stdin(Stdio::inherit())
@@ -50,12 +50,14 @@ async fn run_npm() -> Result<()> {
 }
 
 async fn run_shell_installer() -> Result<()> {
-    eprintln!("oaudit: updating via {INSTALLER_URL}");
-    // curl -LsSf <url> | sh
-    // Piped via a single shell invocation so the curl exit status
-    // propagates through `set -o pipefail`-style handling in `sh`.
-    let script = format!("set -e; curl -LsSf {INSTALLER_URL} | sh");
-    let status = Command::new("sh")
+    eprintln!("oaudit: running shell installer from {INSTALLER_URL}");
+    // `set -euo pipefail` so a curl failure (404, DNS, network) aborts
+    // the pipeline instead of being masked by `sh` exiting 0 on empty
+    // input. POSIX `sh` doesn't reliably support pipefail, so we
+    // require bash explicitly — the cargo-dist installer being piped
+    // in also requires bash, so we're not adding a dependency.
+    let script = format!("set -euo pipefail; curl -LsSf {INSTALLER_URL} | sh");
+    let status = Command::new("bash")
         .arg("-c")
         .arg(&script)
         .stdin(Stdio::inherit())
