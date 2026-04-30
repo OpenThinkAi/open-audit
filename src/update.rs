@@ -4,10 +4,18 @@
 //! executable path, then shells out to the matching install command:
 //!
 //! - npm wrapper (`…/node_modules/open-audit/…`) → `npm install -g open-audit@latest`
-//! - shell installer (cargo-dist) → re-run the installer from GitHub Releases
-//! - `cargo install` (binary under `.cargo/bin/`) → bail with instructions,
-//!   to avoid silently shadowing the cargo-managed copy with a second
-//!   binary from the cargo-dist installer
+//! - everything else (the cargo-dist shell installer is the canonical
+//!   path) → re-run the installer from GitHub Releases
+//!
+//! Detection is intentionally not finer-grained: cargo-dist's default
+//! install-path is `$CARGO_HOME/bin`, which is the same directory as
+//! `cargo install`, so a `.cargo/bin/` substring can't distinguish the
+//! two. Users who installed via a package manager (Homebrew, apt, etc.)
+//! get a warning before the shell installer runs so they can ⌃C and
+//! use their package manager instead — see `run_shell_installer()`.
+//!
+//! Windows hits an explicit bail: the cargo-dist `.sh` installer can't
+//! run there, and Windows binaries aren't shipped yet.
 //!
 //! Both auto-install commands are idempotent and self-report their final
 //! version, so this command does no version comparison of its own.
@@ -31,22 +39,13 @@ pub async fn run() -> Result<()> {
         || exe_str.contains("node_modules\\open-audit")
     {
         run_npm().await
-    } else if exe_str.contains(".cargo/bin/") || exe_str.contains(".cargo\\bin\\") {
-        // Don't run the cargo-dist installer here — it would drop a
-        // second binary in ~/.local/bin (or similar), shadowing the
-        // cargo-managed copy and leaving the user with two oaudits.
-        bail!(
-            "this oaudit was installed via `cargo install`.\n\
-             Update with `cargo install open-audit --force`, or remove\n\
-             the cargo-installed copy and re-run `oaudit update`."
-        )
     } else if cfg!(windows) {
         bail!(
             "automatic update is not supported on Windows yet.\n\
              Reinstall manually from {RELEASES_URL}"
         )
     } else {
-        run_shell_installer().await
+        run_shell_installer(&exe_str).await
     }
 }
 
@@ -71,7 +70,22 @@ async fn run_npm() -> Result<()> {
     Ok(())
 }
 
-async fn run_shell_installer() -> Result<()> {
+async fn run_shell_installer(current_exe: &str) -> Result<()> {
+    // Heuristic: if the running binary lives somewhere a system or
+    // user package manager typically owns (Homebrew, apt, etc.), the
+    // shell installer would drop a second oaudit in `$CARGO_HOME/bin`
+    // and shadow it on PATH. Warn before doing it so the user can ⌃C
+    // and reinstall via the channel they actually use.
+    if looks_package_manager_owned(current_exe) {
+        eprintln!(
+            "oaudit: warning — this binary lives at {current_exe},\n\
+             which looks package-manager-owned (Homebrew, apt, …).\n\
+             The shell installer will write to $CARGO_HOME/bin and may shadow\n\
+             your existing copy on PATH. If you installed via a package manager,\n\
+             ⌃C now and use that channel to update instead."
+        );
+    }
+
     eprintln!("oaudit: running shell installer from {INSTALLER_URL}");
     // `set -euo pipefail` so a curl failure (404, DNS, network) aborts
     // the pipeline instead of being masked by `sh` exiting 0 on empty
@@ -97,4 +111,18 @@ async fn run_shell_installer() -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn looks_package_manager_owned(path: &str) -> bool {
+    // Common package-manager bin dirs. Not exhaustive — best-effort
+    // hint to a user about to silently shadow a managed install.
+    const MARKERS: &[&str] = &[
+        "/opt/homebrew/",   // Apple Silicon Homebrew
+        "/usr/local/Cellar/", "/usr/local/opt/", // Intel Homebrew
+        "/home/linuxbrew/", // Linuxbrew
+        "/usr/bin/",        // apt / pacman / dnf
+        "/usr/sbin/",
+        "/nix/store/",      // Nix
+    ];
+    MARKERS.iter().any(|m| path.contains(m))
 }

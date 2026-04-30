@@ -110,8 +110,17 @@ pub enum Command {
 
     /// Update oaudit to the latest release.
     ///
-    /// Detects how oaudit was installed (npm wrapper or cargo-dist
-    /// shell installer) and re-runs the matching installer.
+    /// Detects how oaudit was installed and re-runs the matching
+    /// installer:
+    ///
+    ///   - npm wrapper → `npm install -g open-audit@latest`
+    ///   - everything else → cargo-dist shell installer from GitHub Releases
+    ///
+    /// Windows is not supported yet (no Windows binaries are shipped);
+    /// the command will tell you to reinstall manually. If the binary
+    /// lives in a path that looks package-manager-owned (Homebrew, apt,
+    /// etc.), the shell installer will warn you before running so you
+    /// can ⌃C and use that channel instead.
     Update,
 }
 
