@@ -5,8 +5,11 @@
 //!
 //! - npm wrapper (`…/node_modules/open-audit/…`) → `npm install -g open-audit@latest`
 //! - shell installer (cargo-dist) → re-run the installer from GitHub Releases
+//! - `cargo install` (binary under `.cargo/bin/`) → bail with instructions,
+//!   to avoid silently shadowing the cargo-managed copy with a second
+//!   binary from the cargo-dist installer
 //!
-//! Both install commands are idempotent and self-report their final
+//! Both auto-install commands are idempotent and self-report their final
 //! version, so this command does no version comparison of its own.
 
 use anyhow::{Context, Result, bail};
@@ -28,6 +31,15 @@ pub async fn run() -> Result<()> {
         || exe_str.contains("node_modules\\open-audit")
     {
         run_npm().await
+    } else if exe_str.contains(".cargo/bin/") || exe_str.contains(".cargo\\bin\\") {
+        // Don't run the cargo-dist installer here — it would drop a
+        // second binary in ~/.local/bin (or similar), shadowing the
+        // cargo-managed copy and leaving the user with two oaudits.
+        bail!(
+            "this oaudit was installed via `cargo install`.\n\
+             Update with `cargo install open-audit --force`, or remove\n\
+             the cargo-installed copy and re-run `oaudit update`."
+        )
     } else if cfg!(windows) {
         bail!(
             "automatic update is not supported on Windows yet.\n\
