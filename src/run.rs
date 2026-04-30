@@ -22,7 +22,7 @@ pub(crate) async fn run(
     specs: &[Spec],
     scope_override: Option<&str>,
 ) -> Result<RunOutcome> {
-    let subject_label = subject.root().display().to_string();
+    let subject_label = subject.label();
     let mut all_findings = Vec::new();
     let mut specs_run = Vec::new();
     let mut aggregate_stats = GatherStats::default();
