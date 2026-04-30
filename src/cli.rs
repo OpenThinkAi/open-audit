@@ -107,6 +107,24 @@ pub enum Command {
 
     /// Scaffold .oaudit/ in the current directory.
     Init,
+
+    /// Update oaudit to the latest release.
+    ///
+    /// Detects how oaudit was installed and re-runs the matching
+    /// installer:
+    ///
+    ///   - npm wrapper → `npm install -g open-audit@latest`
+    ///   - everything else → cargo-dist shell installer from GitHub Releases
+    ///
+    /// If the binary lives in a path that looks package-manager-owned
+    /// (Homebrew, apt, etc.), the shell installer warns and pauses 5s
+    /// before running so you can hit Ctrl+C and use that channel
+    /// instead. Pass `--yes` to skip the pause (for CI / scripted use).
+    Update {
+        /// Skip the package-manager-shadowing warning pause.
+        #[arg(long, alias = "force")]
+        yes: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -160,6 +178,7 @@ pub async fn dispatch(cli: Cli) -> Result<u8> {
         Command::List => list_specs().map(|_| 0),
         Command::Explain { spec, open } => explain(&spec, open).await.map(|_| 0),
         Command::Init => crate::init::scaffold(std::env::current_dir()?).await.map(|_| 0),
+        Command::Update { yes } => crate::update::run(yes).await.map(|_| 0),
     }
 }
 
