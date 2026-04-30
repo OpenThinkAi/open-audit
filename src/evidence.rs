@@ -75,10 +75,7 @@ pub(crate) fn gather(
     // for the same reason single-file mode rejects it.
     if let Subject::Text(t) = subject {
         if scope_override.is_some() {
-            bail!(
-                "--scope has no effect when auditing text from stdin. \
-                 Remove --scope."
-            );
+            bail!(crate::cli::STDIN_SCOPE_REJECT_MSG);
         }
         return Ok(GatherResult {
             chunks: vec![EvidenceChunk {
