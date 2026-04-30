@@ -69,6 +69,28 @@ pub(crate) fn gather(
     spec: &Spec,
     scope_override: Option<&str>,
 ) -> Result<GatherResult> {
+    // Text subject: in-memory, no filesystem. Wrap the supplied string
+    // as a single chunk labeled with what the caller passed via
+    // `--label` (default `stdin`). `--scope` is meaningless and rejected
+    // for the same reason single-file mode rejects it.
+    if let Subject::Text(t) = subject {
+        if scope_override.is_some() {
+            bail!(
+                "--scope has no effect when auditing text from stdin. \
+                 Remove --scope."
+            );
+        }
+        return Ok(GatherResult {
+            chunks: vec![EvidenceChunk {
+                files: vec![EvidenceFile {
+                    path: t.label.clone(),
+                    content: t.content.clone(),
+                }],
+            }],
+            stats: GatherStats::default(),
+        });
+    }
+
     let root = subject.root();
 
     // Single-file subject: no walk, no scope filter. The user pointed at
@@ -507,6 +529,38 @@ mod tests {
         let err = gather(&subject, &spec, None).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("UTF-8"), "got: {msg}");
+    }
+
+    #[test]
+    fn text_subject_yields_a_single_chunk_with_label_as_path() {
+        let text = crate::subject::text::new("issue-body", "audit me please").unwrap();
+        let subject = Subject::Text(text);
+        let spec = parse_spec(
+            // Restrictive default_scope must be ignored for Text subjects;
+            // they bypass scope-globs entirely.
+            "---\nname: t\nmode: untrusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*.tsx\"]\n  exclude: []\n---\n",
+        );
+        let res = gather(&subject, &spec, None).unwrap();
+        assert_eq!(res.chunks.len(), 1);
+        assert_eq!(res.chunks[0].files.len(), 1);
+        assert_eq!(res.chunks[0].files[0].path, "issue-body");
+        assert_eq!(res.chunks[0].files[0].content, "audit me please");
+        // AC #4: gather counters stay zero — no misleading "skipped" claims
+        // for an input that has no filesystem.
+        assert_eq!(res.stats.skipped_too_large, 0);
+        assert_eq!(res.stats.skipped_binary, 0);
+        assert_eq!(res.stats.skipped_io_error, 0);
+    }
+
+    #[test]
+    fn text_subject_rejects_scope_override() {
+        let text = crate::subject::text::new("stdin", "x").unwrap();
+        let subject = Subject::Text(text);
+        let spec = parse_spec("---\nname: t\nmode: untrusted\nkind: prompt\n---\n");
+        let err = gather(&subject, &spec, Some("**/*")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("--scope"), "got: {msg}");
+        assert!(msg.contains("stdin"), "got: {msg}");
     }
 
     #[test]
