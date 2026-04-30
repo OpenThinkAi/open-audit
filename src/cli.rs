@@ -107,6 +107,12 @@ pub enum Command {
 
     /// Scaffold .oaudit/ in the current directory.
     Init,
+
+    /// Update oaudit to the latest release.
+    ///
+    /// Detects how oaudit was installed (npm wrapper or cargo-dist
+    /// shell installer) and re-runs the matching installer.
+    Update,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -160,6 +166,7 @@ pub async fn dispatch(cli: Cli) -> Result<u8> {
         Command::List => list_specs().map(|_| 0),
         Command::Explain { spec, open } => explain(&spec, open).await.map(|_| 0),
         Command::Init => crate::init::scaffold(std::env::current_dir()?).await.map(|_| 0),
+        Command::Update => crate::update::run().await.map(|_| 0),
     }
 }
 

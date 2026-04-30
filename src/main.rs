@@ -17,6 +17,7 @@ mod run;
 mod sandbox;
 mod spec;
 mod subject;
+mod update;
 
 #[tokio::main]
 async fn main() -> ExitCode {
