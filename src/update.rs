@@ -82,8 +82,12 @@ async fn run_shell_installer(current_exe: &str) -> Result<()> {
              which looks package-manager-owned (Homebrew, apt, …).\n\
              The shell installer will write to $CARGO_HOME/bin and may shadow\n\
              your existing copy on PATH. If you installed via a package manager,\n\
-             ⌃C now and use that channel to update instead."
+             ⌃C now and use that channel to update instead.\n\
+             (continuing in 5s)"
         );
+        // Real interrupt window — without this, the warning above
+        // scrolls by while curl is already streaming.
+        std::thread::sleep(std::time::Duration::from_secs(5));
     }
 
     eprintln!("oaudit: running shell installer from {INSTALLER_URL}");
