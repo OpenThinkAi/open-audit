@@ -4,6 +4,11 @@ branches:
       - security
       - rust
       - product
+    required_checks:
+      - name: build
+        run: cargo build --locked
+      - name: test
+        run: cargo test --locked
 reviewers:
   security:
     prompt: .stamp/reviewers/security.md
