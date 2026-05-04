@@ -36,9 +36,24 @@ pub(crate) async fn run(yes: bool) -> Result<()> {
 
     // npm check first, with both separators, so a Windows npm install
     // routes correctly instead of falling through to the Windows bail.
-    if exe_str.contains("node_modules/@openthink/audit")
-        || exe_str.contains("node_modules\\@openthink\\audit")
-    {
+    // Also detect the legacy unscoped `node_modules/open-audit` layout
+    // so users on `open-audit@0.1.x` still get migrated to the scoped
+    // package by `oaudit update` instead of silently being routed to
+    // the cargo-dist shell installer (which would leave the stale npm
+    // wrapper alongside a competing binary on PATH).
+    let on_scoped_npm = exe_str.contains("node_modules/@openthink/audit")
+        || exe_str.contains("node_modules\\@openthink\\audit");
+    let on_legacy_npm = exe_str.contains("node_modules/open-audit")
+        || exe_str.contains("node_modules\\open-audit");
+    if on_scoped_npm || on_legacy_npm {
+        if on_legacy_npm {
+            eprintln!(
+                "oaudit: detected legacy `open-audit` npm install — migrating to `@openthink/audit`."
+            );
+            eprintln!(
+                "oaudit: after this completes, run `npm uninstall -g open-audit` to remove the old package."
+            );
+        }
         run_npm().await
     } else if cfg!(windows) {
         bail!(

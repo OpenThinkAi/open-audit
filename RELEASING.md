@@ -1,5 +1,12 @@
 # Releasing open-audit
 
+> **One-time rename setup (v0.2.0):** the npm wrapper moved from
+> `open-audit` to the scoped `@openthink/audit`. This is a brand-new
+> package on npm — Trusted Publishing must be re-configured for the
+> new name (see "Initial Setup" below) before the first 0.2.0 release
+> CI run can succeed. The old `open-audit` package will be deprecated
+> with a redirect message via `npm deprecate` after 0.2.0 lands.
+
 Distribution is driven by [`dist`](https://opensource.axo.dev/cargo-dist/).
 The full release loop is **fully automated from a Cargo.toml version bump**:
 
@@ -22,10 +29,11 @@ handles the rest.
 - `x86_64-unknown-linux-gnu`
 - `x86_64-unknown-linux-musl`
 
-Note: v0.1.0 was the npm-name-claim bootstrap publish — the wrapper
-exists but no platform binaries were ever uploaded to GitHub Releases,
-so `npm install -g @openthink/audit@0.2.0` doesn't actually install anything
-runnable. v0.1.1 is the first release with binaries.
+Historical note: under the previous `open-audit` name, v0.1.0 was the
+npm-name-claim bootstrap publish (no platform binaries) and v0.1.1 was
+the first release with binaries. Under the new `@openthink/audit`
+name, v0.2.0 is both the first publish and the first release with
+binaries — there's no equivalent dry bootstrap.
 
 **Not yet shipped — short list for v0.2:**
 
@@ -138,7 +146,7 @@ After CI completes, verify:
 
 ```sh
 # Binaries on GH Releases
-gh release view v0.1.1 --json assets --jq '.assets[].name'
+gh release view v0.2.0 --json assets --jq '.assets[].name'
 
 # npm package landed with provenance
 npm view @openthink/audit@0.2.0 dist
@@ -146,7 +154,7 @@ npm view @openthink/audit@0.2.0 _npmUser  # should show OIDC publisher
 
 # Quick install smoke test
 npm install -g @openthink/audit@0.2.0
-oaudit --version    # should print 0.1.1
+oaudit --version    # should print 0.2.0
 oaudit explain trusted/security | head -5
 ```
 
