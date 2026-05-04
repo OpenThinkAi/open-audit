@@ -1,6 +1,6 @@
 [package]
 name = "open-audit"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 description = "CLI for auditing codebases against composable spec docs."
 license = "MIT OR Apache-2.0"
@@ -27,7 +27,7 @@ pr-run-mode = "plan"
 # Where to host releases
 hosting = "github"
 # The npm package should have this name
-npm-package = "open-audit"
+npm-package = "@openthink/audit"
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Whether to install an updater program
