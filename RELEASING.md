@@ -24,7 +24,7 @@ handles the rest.
 
 Note: v0.1.0 was the npm-name-claim bootstrap publish — the wrapper
 exists but no platform binaries were ever uploaded to GitHub Releases,
-so `npm install -g open-audit@0.1.0` doesn't actually install anything
+so `npm install -g @openthink/audit@0.2.0` doesn't actually install anything
 runnable. v0.1.1 is the first release with binaries.
 
 **Not yet shipped — short list for v0.2:**
@@ -63,10 +63,10 @@ dist plan
 dist build --artifacts=all
 
 # Publish the npm wrapper to claim the name (you'll be prompted for 2FA)
-npm publish --access public ./target/distrib/open-audit-npm-package.tar.gz
+npm publish --access public ./target/distrib/*npm-package.tar.gz
 
 # Configure Trusted Publishing on npm (one-time UI step):
-#   https://www.npmjs.com/package/open-audit/access
+#   https://www.npmjs.com/package/@openthink/audit/access
 #     → Trusted Publishers → Add publisher
 #     → repository:  OpenThinkAi/open-audit
 #     → workflow:    release.yml
@@ -96,10 +96,10 @@ That's it. CI handles the rest:
 
 1. Stamp server post-receive hook mirrors `main` to GitHub.
 2. `release.yml` fires on the GitHub push to main:
-   - Reads version from `Cargo.toml` (skips if `open-audit@<version>` already on npm)
+   - Reads version from `Cargo.toml` (skips if `@openthink/audit@<version>` already on npm)
    - Cross-compiles binaries for all configured targets via `cargo-zigbuild`
    - Creates a GitHub Release at `v<version>` with binaries + checksums
-   - Publishes `open-audit@<version>` to npm via OIDC + `--provenance`
+   - Publishes `@openthink/audit@<version>` to npm via OIDC + `--provenance`
 
 Idempotent: any push to main that doesn't bump the version is a no-op.
 
@@ -111,7 +111,7 @@ binary on `npm install`.
 If the workflow fails mid-release (npm publish fails, an upload step
 errors, etc.), the GitHub Release for `v<version>` may exist in draft
 state but not be fully populated, AND the npm publish may not have
-succeeded. The npm gate (`npm view open-audit@<version>`) is the
+succeeded. The npm gate (`npm view @openthink/audit@<version>`) is the
 source of truth for "shipped" — but `gh release create` will refuse
 to create a duplicate, so a naive retry-by-pushing will fail.
 
@@ -127,7 +127,7 @@ stamp merge ... # if going through stamp loop
 stamp push main
 ```
 
-The npm gate will see `open-audit@<version>` is still not published, so
+The npm gate will see `@openthink/audit@<version>` is still not published, so
 the release flow runs end-to-end fresh. If the failure was transient
 (network, OIDC blip), this should succeed; if it's a real bug, fix in a
 new commit and let auto-flow take it.
@@ -141,11 +141,11 @@ After CI completes, verify:
 gh release view v0.1.1 --json assets --jq '.assets[].name'
 
 # npm package landed with provenance
-npm view open-audit@0.1.1 dist
-npm view open-audit@0.1.1 _npmUser  # should show OIDC publisher
+npm view @openthink/audit@0.2.0 dist
+npm view @openthink/audit@0.2.0 _npmUser  # should show OIDC publisher
 
 # Quick install smoke test
-npm install -g open-audit@0.1.1
+npm install -g @openthink/audit@0.2.0
 oaudit --version    # should print 0.1.1
 oaudit explain trusted/security | head -5
 ```

@@ -39,7 +39,7 @@ permissions:
 # If there's a prerelease-style suffix to the version, then the release(s)
 # will be marked as a prerelease.
 # Trigger: on push to main (matches OpenThinkAi pattern). Reads version
-# from Cargo.toml; if open-audit@<version> is already on npm, every other
+# from Cargo.toml; if @openthink/audit@<version> is already on npm, every other
 # job short-circuits via `needs.plan.outputs.publishing == 'false'`.
 #
 # Acknowledged regressions vs the prior hand-rolled workflow:
@@ -101,12 +101,12 @@ jobs:
       - name: check if already on npm
         id: check_npm
         run: |
-          if npm view "open-audit@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "@openthink/audit@${{ steps.version.outputs.version }}" version >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "open-audit@${{ steps.version.outputs.version }} already on npm — skipping release."
+            echo "@openthink/audit@${{ steps.version.outputs.version }} already on npm — skipping release."
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "open-audit@${{ steps.version.outputs.version }} not on npm — proceeding."
+            echo "@openthink/audit@${{ steps.version.outputs.version }} not on npm — proceeding."
           fi
 
       - name: Install dist

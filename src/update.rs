@@ -3,7 +3,7 @@
 //! Detects how `oaudit` was installed by inspecting the current
 //! executable path, then shells out to the matching install command:
 //!
-//! - npm wrapper (`…/node_modules/open-audit/…`) → `npm install -g open-audit@latest`
+//! - npm wrapper (`…/node_modules/@openthink/audit/…`) → `npm install -g @openthink/audit@latest`
 //! - everything else (the cargo-dist shell installer is the canonical
 //!   path) → re-run the installer from GitHub Releases
 //!
@@ -36,8 +36,8 @@ pub(crate) async fn run(yes: bool) -> Result<()> {
 
     // npm check first, with both separators, so a Windows npm install
     // routes correctly instead of falling through to the Windows bail.
-    if exe_str.contains("node_modules/open-audit")
-        || exe_str.contains("node_modules\\open-audit")
+    if exe_str.contains("node_modules/@openthink/audit")
+        || exe_str.contains("node_modules\\@openthink\\audit")
     {
         run_npm().await
     } else if cfg!(windows) {
@@ -51,20 +51,20 @@ pub(crate) async fn run(yes: bool) -> Result<()> {
 }
 
 async fn run_npm() -> Result<()> {
-    eprintln!("oaudit: running `npm install -g open-audit@latest`");
+    eprintln!("oaudit: running `npm install -g @openthink/audit@latest`");
     let status = Command::new("npm")
-        .args(["install", "-g", "open-audit@latest"])
+        .args(["install", "-g", "@openthink/audit@latest"])
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
         .await
-        .context("spawn `npm install -g open-audit@latest`")?;
+        .context("spawn `npm install -g @openthink/audit@latest`")?;
 
     if !status.success() {
         bail!(
             "npm install failed (exit {:?}).\n\
-             Try `npm install -g open-audit@latest` manually, or reinstall from {RELEASES_URL}",
+             Try `npm install -g @openthink/audit@latest` manually, or reinstall from {RELEASES_URL}",
             status.code()
         );
     }

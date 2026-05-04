@@ -113,7 +113,7 @@ pub enum Command {
     /// Detects how oaudit was installed and re-runs the matching
     /// installer:
     ///
-    ///   - npm wrapper → `npm install -g open-audit@latest`
+    ///   - npm wrapper → `npm install -g @openthink/audit@latest`
     ///   - everything else → cargo-dist shell installer from GitHub Releases
     ///
     /// If the binary lives in a path that looks package-manager-owned
