@@ -1,0 +1,10 @@
+# Cap test-execution parallelism so `cargo test` doesn't spawn one thread per
+# core (and, for tests that shell out to `claude`, one subprocess per core).
+# `force = false` means an explicit RUST_TEST_THREADS in the environment wins,
+# so a lone interactive run can still go wide.
+#
+# Note: this caps test *execution* only, not compilation. When running many
+# concurrent cargo worktrees, also cap the compiler at the harness level with
+# `CARGO_BUILD_JOBS` (left unset here so normal single-build dev stays fast).
+[env]
+RUST_TEST_THREADS = { value = "4", force = false }
