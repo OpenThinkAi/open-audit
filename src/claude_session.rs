@@ -10,10 +10,20 @@
 //! we shell out instead of calling the Anthropic API directly.
 //!
 //! Runtime dep: `claude` must be on $PATH.
+//!
+//! Isolation: the subject under audit is untrusted input, so the child is
+//! locked down to a pure text-in/text-out call. It gets no tools, no MCP
+//! servers, no slash commands/skills, and none of the user/project/local
+//! settings files (which is where hooks, permission allow-rules and plugins
+//! live). It runs in a fresh empty tempdir so a hostile repo's
+//! `.claude/settings.json`, `.mcp.json` or CLAUDE.md is never discovered
+//! from cwd. `--bare` would be simpler but disables OAuth, which defeats
+//! the reason we shell out in the first place.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
 
@@ -55,8 +65,35 @@ struct ResultEvent {
 
 /// Send `user_message` to `claude` with `system_prompt` as the system role,
 /// wait for the run to complete, and return the model's final text reply.
+/// Upper bound on one spec's audit call. Generous because large subjects
+/// take a while; the point is that a wedged child can't hang oaudit (and
+/// a CI job) forever.
+const CLAUDE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// Flags that strip the child down to a text-only completion. Kept in one
+/// place so the isolation contract is reviewable (and testable) at a glance.
+const ISOLATION_ARGS: &[&str] = &[
+    "--restricted",
+    "--tools",
+    "",
+    "--setting-sources",
+    "",
+    "--strict-mcp-config",
+    "--mcp-config",
+    r#"{"mcpServers":{}}"#,
+    "--disable-slash-commands",
+    "--permission-prompts",
+    "none",
+    "--no-session-persistence",
+];
+
 pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Result<String> {
+    // Empty cwd: nothing for claude to auto-discover. Removed on drop, after
+    // the child has exited (or been killed).
+    let workdir = tempfile::tempdir().context("creating isolated working dir for claude")?;
+
     let mut child = Command::new("claude")
+        .current_dir(workdir.path())
         .arg("--print")
         .arg("--input-format=stream-json")
         .arg("--output-format=stream-json")
@@ -68,6 +105,7 @@ pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Res
         // prompt via a path instead.
         .arg("--system-prompt")
         .arg(system_prompt)
+        .args(ISOLATION_ARGS)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -85,10 +123,20 @@ pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Res
     // forever in read_until_result.
     let stderr_task = tokio::spawn(read_stderr(stderr));
 
-    write_request(stdin, user_message).await?;
-    let result = read_until_result(stdout).await;
-
-    let status = child.wait().await.context("waiting for claude child")?;
+    let exchange = async {
+        write_request(stdin, user_message).await?;
+        let result = read_until_result(stdout).await;
+        let status = child.wait().await.context("waiting for claude child")?;
+        anyhow::Ok((result, status))
+    };
+    let (result, status) = match tokio::time::timeout(CLAUDE_TIMEOUT, exchange).await {
+        Ok(r) => r?,
+        // Returning drops `child`, which kills it (kill_on_drop).
+        Err(_) => bail!(
+            "claude did not finish within {} minutes; aborted. Try narrowing --scope.",
+            CLAUDE_TIMEOUT.as_secs() / 60
+        ),
+    };
     let stderr_text = stderr_task.await.unwrap_or_default();
 
     match result {
@@ -100,6 +148,15 @@ pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Res
             // surface it whenever it isn't empty — not only on non-zero
             // exit. Keeps our "check stderr for details" promise honest.
             let stderr_trimmed = stderr_text.trim();
+            // Fail closed: an older claude that rejects an isolation flag
+            // must not be retried without it.
+            if stderr_trimmed.contains("unknown option") {
+                bail!(
+                    "your `claude` CLI doesn't support oaudit's isolation flags \
+                     (--restricted, --tools, --setting-sources, --permission-prompts). \
+                     Update it with `claude update` and retry.\n  stderr: {stderr_trimmed}"
+                );
+            }
             if !status.success() {
                 bail!(
                     "claude exited with {status}.\n  stderr: {stderr_trimmed}\n  parse: {e:#}",
@@ -207,6 +264,17 @@ pub(crate) async fn preflight() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isolation_args_disable_tools_settings_and_mcp() {
+        let pairs: Vec<_> = ISOLATION_ARGS.windows(2).collect();
+        assert!(pairs.contains(&["--tools", ""].as_slice()));
+        assert!(pairs.contains(&["--setting-sources", ""].as_slice()));
+        assert!(pairs.contains(&["--permission-prompts", "none"].as_slice()));
+        for flag in ["--restricted", "--strict-mcp-config", "--disable-slash-commands"] {
+            assert!(ISOLATION_ARGS.contains(&flag), "missing {flag}");
+        }
+    }
 
     #[test]
     fn user_message_serializes_as_expected() {
