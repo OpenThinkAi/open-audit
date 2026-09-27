@@ -49,7 +49,7 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     let dim = Style::new().dim();
 
     // Header
-    println!("{}", style(format!("audit: {}", report.subject)).bold());
+    println!("{}", style(format!("audit: {}", clean(&report.subject))).bold());
     println!(
         "{}",
         dim.apply_to(format!(
@@ -57,7 +57,7 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             if report.specs_run.is_empty() {
                 "(none)".to_string()
             } else {
-                report.specs_run.join(", ")
+                clean(&report.specs_run.join(", "))
             }
         ))
     );
@@ -76,7 +76,7 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         }
         println!("{}", dim.apply_to(format!("skipped: {}", parts.join(", "))));
         for sample in &stats.io_error_samples {
-            println!("{}", dim.apply_to(format!("  - {sample}")));
+            println!("{}", dim.apply_to(format!("  - {}", clean(sample))));
         }
     }
     println!();
@@ -119,16 +119,32 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
 
 fn print_finding(f: &Finding) {
     let sev = severity_tag(f.severity);
-    let location = format!("{}:{}", f.location.file, f.location.line);
-    println!("{} {} ({})", sev, style(&f.title).bold(), Style::new().dim().apply_to(location));
+    let location = format!("{}:{}", clean(&f.location.file), f.location.line);
+    println!(
+        "{} {} ({})",
+        sev,
+        style(clean(&f.title)).bold(),
+        Style::new().dim().apply_to(location)
+    );
     if let Some(spec) = &f.spec {
-        println!("  {}", Style::new().dim().apply_to(format!("from: {spec}")));
+        println!("  {}", Style::new().dim().apply_to(format!("from: {}", clean(spec))));
     }
-    println!("  {}", f.explanation);
+    println!("  {}", clean(&f.explanation));
     if !f.suggestion.is_empty() {
-        println!("  {}: {}", Style::new().green().apply_to("→"), f.suggestion);
+        println!("  {}: {}", Style::new().green().apply_to("→"), clean(&f.suggestion));
     }
     println!();
+}
+
+/// Strip control characters (keeping `\n` and `\t`) from text that came
+/// from the model or the subject. Otherwise an audited file can smuggle
+/// escape sequences through a finding: OSC 52 clipboard writes, cursor
+/// moves that paint over a CRITICAL, fake hyperlinks. JSON output doesn't
+/// need this; serde escapes control characters.
+fn clean(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect()
 }
 
 fn severity_tag(s: Severity) -> String {
@@ -183,6 +199,12 @@ pub(crate) fn exit_code(report: &AuditReport) -> u8 {
 mod tests {
     use super::*;
     use crate::finding::{Confidence, Location};
+
+    #[test]
+    fn clean_strips_escape_sequences_but_keeps_layout() {
+        let hostile = "ok\u{1b}]52;c;cm0gLXJmIH4=\u{7}\u{1b}[2Aline\n\tnext\r\u{9b}31m";
+        assert_eq!(clean(hostile), "ok]52;c;cm0gLXJmIH4=[2Aline\n\tnext31m");
+    }
 
     fn finding(severity: Severity) -> Finding {
         Finding {
