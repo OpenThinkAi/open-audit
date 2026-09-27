@@ -1,9 +1,10 @@
 # ui-leaf integration friction log
 
 This file documents pain points encountered while building a Node bridge so a
-non-Node CLI (Rust `oaudit`) can drive **ui-leaf v0.1.3** as a subprocess.
-Captured as feedback for the ui-leaf author ahead of Spike #4
-(language-neutral binary). Date of integration: 2026-04-27.
+non-Node CLI (Rust `oaudit`) can drive **ui-leaf v0.1.3** as a subprocess,
+written as upstream feedback for ui-leaf. It also explains the workarounds
+in `bridge.js` and `src/render.rs`. Date of integration: 2026-04-27; later
+ui-leaf releases may have addressed some items.
 
 ## What we built
 
@@ -145,9 +146,9 @@ helps both — a `silent: true` MountOption that suppresses ui-leaf's banner,
 the rsbuild lifecycle messages, *and* the deprecation warning would let
 consumers present a clean output by default and opt into verbosity.
 
-We did NOT work around this in the Rust caller, per Matt's instruction:
-"if it's clearly ui-leaf's missing piece rather than your problem to solve,
-report it back rather than working around it. The friction is the data."
+We deliberately did not work around this in the Rust caller: it is a
+missing ui-leaf option rather than a consumer-side problem, so it is
+reported here instead.
 
 ### 8. `port: 5810` default collides on concurrent invocations
 

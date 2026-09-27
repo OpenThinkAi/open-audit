@@ -14,8 +14,12 @@
 # title/body based on your changelogs.
 
 name: Release
+# HAND-EDIT (dist generates `contents: write` here): least privilege by
+# default. Jobs that compile code (and so run third-party build scripts) get
+# a read-only token; only `host` (creates the GitHub Release + attestations)
+# and `publish-npm` (OIDC) are granted more, at job level.
 permissions:
-  "contents": "write"
+  "contents": "read"
 
 # This task will run whenever you push a git tag that looks like a version
 # like "1.0.0", "v0.1.0-prerelease.1", "my-app/0.1.0", "releases/v1.0.0", etc.
@@ -49,9 +53,8 @@ permissions:
 #      logic so a created-but-not-uploaded release could be recovered by
 #      re-pushing. dist's host job manages the release lifecycle through
 #      its own draft → upload → release steps. If a run fails mid-flight
-#      (npm publish fails, network blip during upload), the recovery
-#      procedure is: delete the partial GitHub Release manually, then
-#      re-trigger by pushing any commit. See RELEASING.md.
+#      (npm publish fails, network blip during upload), see the recovery
+#      procedure in RELEASING.md.
 #
 #   2. No PR-time `dist plan` check. The previous workflow ran on PRs
 #      to catch "this won't build" before merge. We rely on the stamp-loop
@@ -79,7 +82,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
           submodules: recursive
@@ -115,7 +118,7 @@ jobs:
         run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
       - name: Cache dist
         if: steps.check_npm.outputs.published == 'false'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/dist
@@ -127,7 +130,7 @@ jobs:
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: "Upload dist-manifest.json"
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: artifacts-plan-dist-manifest
           path: plan-dist-manifest.json
@@ -157,14 +160,15 @@ jobs:
       matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container && matrix.container.image || null }}
+    # HAND-EDIT: GH_TOKEN removed. This job runs crate build scripts; it
+    # needs no GitHub API access (dist build only compiles and packages).
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/${{ join(matrix.targets, '-') }}-dist-manifest.json
     steps:
       - name: enable windows longpaths
         run: |
           git config --global core.longpaths true
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
           submodules: recursive
@@ -179,7 +183,7 @@ jobs:
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
       - name: Fetch local artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: artifacts-*
           path: target/distrib/
@@ -187,6 +191,11 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      # HAND-EDIT: dist has no setting to pass `--locked` to `cargo build`,
+      # and will silently rewrite a stale Cargo.lock. Fail here instead, so
+      # release binaries are always built from the committed lockfile.
+      - name: Verify Cargo.lock is up to date
+        run: cargo fetch --locked
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot
@@ -206,7 +215,7 @@ jobs:
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
       - name: "Upload artifacts"
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: artifacts-build-local-${{ join(matrix.targets, '_') }}
           path: |
@@ -219,23 +228,24 @@ jobs:
       - plan
       - build-local-artifacts
     runs-on: "ubuntu-22.04"
+    # HAND-EDIT: GH_TOKEN removed; building installers/checksums needs no
+    # GitHub API access.
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       BUILD_MANIFEST_NAME: target/distrib/global-dist-manifest.json
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
           submodules: recursive
       - name: Install cached dist
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/
       - run: chmod +x ~/.cargo/bin/dist
       # Get all the local artifacts for the global tasks to use (for e.g. checksums)
       - name: Fetch local artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: artifacts-*
           path: target/distrib/
@@ -253,7 +263,7 @@ jobs:
 
           cp dist-manifest.json "$BUILD_MANIFEST_NAME"
       - name: "Upload artifacts"
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: artifacts-build-global
           path: |
@@ -272,20 +282,28 @@ jobs:
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.host.outputs.manifest }}
+    # Matches what `dist generate` emits for github-attestations-phase = "host"
+    # (plus `contents: write`, which this job needs for `gh release create`).
+    # Attesting here rather than in build-local-artifacts keeps the OIDC
+    # token away from jobs that run crate build scripts.
+    permissions:
+      "attestations": "write"
+      "contents": "write"
+      "id-token": "write"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
           submodules: recursive
       - name: Install cached dist
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: cargo-dist-cache
           path: ~/.cargo/bin/
       - run: chmod +x ~/.cargo/bin/dist
       # Fetch artifacts from scratch-storage
       - name: Fetch artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: artifacts-*
           path: target/distrib/
@@ -298,14 +316,14 @@ jobs:
           cat dist-manifest.json
           echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
       - name: "Upload dist-manifest.json"
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           # Overwrite the previous copy
           name: artifacts-dist-manifest
           path: dist-manifest.json
       # Create a GitHub Release while uploading all files to it
       - name: "Download GitHub Artifacts"
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: artifacts-*
           path: artifacts
@@ -314,6 +332,11 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      - name: Attest
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: |
+            artifacts/*
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
@@ -332,10 +355,13 @@ jobs:
   # these patches — re-apply them after any regen. The patches are:
   #   1. permissions.id-token: write  (required for OIDC)
   #   2. node-version 22.x            (needed for npm-via-npx upgrade path)
-  #   3. npx -y npm@latest publish    (Node 22 ships npm 10.x; --access /
-  #      OIDC publish auth needs npm 11.5.1+, which is fetched per-run)
+  #   3. npx -y npm@11.20.0 publish   (Node 22 ships npm 10.x; OIDC publish
+  #      auth needs npm 11.5.1+. Pinned to an exact version: this job holds
+  #      id-token: write, so it must not run whatever `npm@latest` is today.
+  #      Bump deliberately.)
   #   4. --provenance                 (attaches an SLSA build attestation)
   #   5. NODE_AUTH_TOKEN env removed  (OIDC supplies the credential)
+  #   6. GH_TOKEN env removed         (nothing here calls the GitHub API)
   publish-npm:
     needs:
       - plan
@@ -345,7 +371,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ needs.plan.outputs.val }}
     # PATCHED: gate on `publishing` first so fromJson never runs on an
     # empty val (when the npm gate skipped). Belt-and-suspenders — the
@@ -354,19 +379,19 @@ jobs:
     if: ${{ needs.plan.outputs.publishing == 'true' && (!fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases) }}
     steps:
       - name: Fetch npm packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: artifacts-*
           path: npm/
           merge-multiple: true
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
       - run: |
           for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith("-npm-package.tar.gz")] | any)'); do
             pkg=$(echo "$release" | jq '.artifacts[] | select(endswith("-npm-package.tar.gz"))' --raw-output)
-            npx -y npm@latest publish --access public --provenance "./npm/${pkg}"
+            npx -y npm@11.20.0 publish --access public --provenance "./npm/${pkg}"
           done
 
   announce:
@@ -382,7 +407,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
           submodules: recursive
