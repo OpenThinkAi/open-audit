@@ -1,170 +1,121 @@
 # Releasing open-audit
 
-> **One-time rename setup (v0.2.0):** the npm wrapper moved from
-> `open-audit` to the scoped `@openthink/audit`. This is a brand-new
-> package on npm — Trusted Publishing must be re-configured for the
-> new name (see "Initial Setup" below) before the first 0.2.0 release
-> CI run can succeed. The old `open-audit` package will be deprecated
-> with a redirect message via `npm deprecate` after 0.2.0 lands.
+Releases are built by [`dist`](https://opensource.axo.dev/cargo-dist/)
+(v0.31.0) in `.github/workflows/release.yml` and are driven entirely by the
+version in `Cargo.toml`. Nobody pushes tags, runs `gh release`, or runs
+`npm publish` by hand.
 
-Distribution is driven by [`dist`](https://opensource.axo.dev/cargo-dist/).
-The full release loop is **fully automated from a Cargo.toml version bump**:
+## Cutting a release
 
-```
-bump Cargo.toml → stamp loop → merge → mirror to GH
-   ↓
-auto-tag.yml fires on push to main, creates v<version> tag
-   ↓
-release.yml fires on the tag, builds binaries + GitHub Release + npm publish via OIDC
-```
+1. On a branch, bump `version` in `Cargo.toml` and run `cargo build` so
+   `Cargo.lock` picks up the new version. Commit both.
+2. Land it through the normal stamp flow:
 
-No manual tag pushes, no `gh release` commands, no `npm publish` from
-your laptop. Bump the version, ship it through the stamp loop, and CI
-handles the rest.
+   ```sh
+   stamp review --diff main..<branch>
+   stamp merge <branch> --into main
+   stamp push main
+   ```
 
-## Targets shipped (starting v0.1.1)
+3. The stamp server mirrors `main` to GitHub. The push to `main` triggers
+   `release.yml`, which:
+   - **plan** — reads the version from `Cargo.toml`. If
+     `@openthink/audit@<version>` is already on npm, every later job is
+     skipped, so pushes that don't bump the version are no-ops.
+   - **build-local-artifacts** — builds `oaudit` for each target on a native
+     GitHub runner (no cross-compilation). Fails if `Cargo.lock` is out of
+     date (`cargo fetch --locked`).
+   - **build-global-artifacts** — shell installer, npm wrapper package,
+     checksums.
+   - **host** — generates build provenance attestations for every artifact,
+     then creates the `v<version>` GitHub Release (tag included) with the
+     binaries and checksums.
+   - **publish-npm** — publishes `@openthink/audit@<version>` with npm
+     Trusted Publishing (OIDC, no stored token) and `--provenance`.
+
+The npm package is a thin wrapper that downloads the matching platform
+binary from the GitHub Release on install.
+
+## Targets
 
 - `aarch64-apple-darwin` (Apple Silicon)
 - `x86_64-apple-darwin` (Intel macOS)
 - `x86_64-unknown-linux-gnu`
 - `x86_64-unknown-linux-musl`
 
-Historical note: under the previous `open-audit` name, v0.1.0 was the
-npm-name-claim bootstrap publish (no platform binaries) and v0.1.1 was
-the first release with binaries. Under the new `@openthink/audit`
-name, v0.2.0 is both the first publish and the first release with
-binaries — there's no equivalent dry bootstrap.
+Not yet shipped: ARM Linux (`aarch64-unknown-linux-gnu` / `-musl`) and
+Windows. Adding them is a change to `targets` in
+`[workspace.metadata.dist]` plus regenerating the workflow (see below); dist
+assigns native runners per target.
 
-**Not yet shipped — short list for v0.2:**
+## One-time setup (repository / package admins)
 
-- **`aarch64-unknown-linux-gnu`** (ARM Linux glibc — Raspberry Pi,
-  Graviton, Ampere). Was originally targeted for v0.1.1; cross-compile
-  via cargo-zigbuild from macOS hits a `libz-sys` build-script failure
-  (`ar` wrapper can't produce `libz.a`). Fix paths: switch to dist's
-  matrix-per-target shape (Linux ARM runs natively on a Linux runner);
-  install a real `aarch64-linux-gnu` cross toolchain instead of zig;
-  or vendor a precompiled libz.
-- **`aarch64-unknown-linux-musl`** (ARM Linux musl — Alpine ARM). Same
-  cross-compile family, never tried in v0.1.1; expected to need the
-  same fix.
-- **Windows (`x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`).** The
-  matrix-per-target reshape that unlocks ARM Linux unlocks these too.
-  Deferred.
+Listed so they can be checked or recreated.
 
-## Bootstrap (one-time)
+- **npm Trusted Publisher.** On npmjs.com: `@openthink/audit` → Settings →
+  Trusted Publisher → GitHub Actions, with organization `OpenThinkAi`,
+  repository `open-audit`, workflow filename `release.yml`, environment left
+  blank. Trusted Publishing only works for a package that already exists; a
+  brand-new package name needs one initial publish by an npm owner first.
+- **GitHub repository settings** the release process assumes: rulesets that
+  keep GitHub a read-only mirror of the stamp server (no direct pushes to
+  `main`; `v*` tags can only be created by the release workflow and never
+  updated or deleted), immutable releases, and private vulnerability
+  reporting (see `SECURITY.md`).
 
-OIDC Trusted Publishing requires the npm package to exist before it can
-trust a workflow. So the very first publish happens with an npm auth
-token, locally. After that, CI takes over with zero secrets.
+## Verifying a release
 
 ```sh
-# Tools
-brew install cargo-dist cargo-zigbuild zig
+# Assets on the GitHub Release
+gh release view v<version> --json assets --jq '.assets[].name'
 
-# Verify the local build is clean
-cargo test
-dist plan
+# Build provenance for a downloaded artifact
+gh attestation verify open-audit-x86_64-unknown-linux-gnu.tar.xz \
+  --repo OpenThinkAi/open-audit
 
-# Bump version in Cargo.toml (e.g., 0.1.0)
+# npm package published via OIDC with provenance
+npm view @openthink/audit@<version> dist
 
-# Build artifacts locally
-dist build --artifacts=all
-
-# Publish the npm wrapper to claim the name (you'll be prompted for 2FA)
-npm publish --access public ./target/distrib/*npm-package.tar.gz
-
-# Configure Trusted Publishing on npm (one-time UI step):
-#   https://www.npmjs.com/package/@openthink/audit/access
-#     → Trusted Publishers → Add publisher
-#     → repository:  OpenThinkAi/open-audit
-#     → workflow:    release.yml
-#     → environment: (leave blank)
+# Install smoke test
+npm install -g @openthink/audit@<version>
+oaudit --version
 ```
 
-After the Trusted Publisher is configured, every release is driven by a
-Cargo.toml version bump — no tokens, no manual tag pushes.
+## Recovering from a partial failure
 
-## Cutting a release (recurring — the whole flow)
+The npm version is the source of truth for "shipped".
 
-```sh
-# 1. Land your changes via the normal stamp loop on feature branches.
+- **`publish-npm` failed, GitHub Release exists.** Use "Re-run failed jobs"
+  on the workflow run. The build artifacts are reused; nothing is rebuilt.
+- **`host` failed before the release was published.** `gh release create`
+  uploads to a draft and publishes last, so at most a draft is left behind.
+  Delete it (`gh release delete v<version> --yes`), then re-run the
+  workflow.
+- **A published release is wrong.** With immutable releases enabled, a
+  published release's tag and assets cannot be changed or reused. Bump the
+  patch version and release again.
 
-# 2. Bump version in Cargo.toml on a release branch.
-git checkout -b release/v0.1.1
-# edit Cargo.toml: version = "0.1.1"
-git add Cargo.toml Cargo.lock && git commit -m "release: bump to v0.1.1"
+## Maintaining release.yml
 
-# 3. Send through the stamp loop.
-stamp review --diff main..release/v0.1.1
-stamp merge release/v0.1.1 --into main
-stamp push main
-```
+`release.yml` is generated by `dist` and then hand-patched. Every patch is
+marked with a `HAND-EDIT` or `PATCHED` comment in the file:
 
-That's it. CI handles the rest:
+- trigger: push to `main` with the npm version gate, instead of tag pushes;
+- workflow-level `permissions: contents: read`; `GH_TOKEN` removed from jobs
+  that don't call the GitHub API;
+- the `Cargo.lock` check in `build-local-artifacts` (dist has no `--locked`
+  setting and would otherwise silently update the lockfile);
+- `publish-npm`: OIDC (`id-token: write`, no `NODE_AUTH_TOKEN`), Node 22,
+  an exact pinned npm (`npx -y npm@<version>`) and `--provenance`.
 
-1. Stamp server post-receive hook mirrors `main` to GitHub.
-2. `release.yml` fires on the GitHub push to main:
-   - Reads version from `Cargo.toml` (skips if `@openthink/audit@<version>` already on npm)
-   - Cross-compiles binaries for all configured targets via `cargo-zigbuild`
-   - Creates a GitHub Release at `v<version>` with binaries + checksums
-   - Publishes `@openthink/audit@<version>` to npm via OIDC + `--provenance`
+`allow-dirty = ["ci"]` in `Cargo.toml` stops dist from failing CI on this
+drift. Everything else — attestations in the `host` job, SHA-pinned Actions
+(`[workspace.metadata.dist.github-action-commits]`), `pr-run-mode = "skip"`
+— is dist configuration, so `dist generate` reproduces it.
 
-Idempotent: any push to main that doesn't bump the version is a no-op.
-
-The npm package is a thin wrapper that downloads the matching platform
-binary on `npm install`.
-
-## Partial failure recovery
-
-If the workflow fails mid-release (npm publish fails, an upload step
-errors, etc.), the GitHub Release for `v<version>` may exist in draft
-state but not be fully populated, AND the npm publish may not have
-succeeded. The npm gate (`npm view @openthink/audit@<version>`) is the
-source of truth for "shipped" — but `gh release create` will refuse
-to create a duplicate, so a naive retry-by-pushing will fail.
-
-**Recovery procedure:**
-
-```sh
-# 1. Delete the partial GitHub Release (this also deletes the v<version> tag).
-gh release delete v0.1.1 --cleanup-tag --yes
-
-# 2. Re-trigger CI by pushing any commit to main (smallest possible change works).
-git commit --allow-empty -m "release: retry v0.1.1"
-stamp merge ... # if going through stamp loop
-stamp push main
-```
-
-The npm gate will see `@openthink/audit@<version>` is still not published, so
-the release flow runs end-to-end fresh. If the failure was transient
-(network, OIDC blip), this should succeed; if it's a real bug, fix in a
-new commit and let auto-flow take it.
-
-## Manual release verification
-
-After CI completes, verify:
-
-```sh
-# Binaries on GH Releases
-gh release view v0.2.0 --json assets --jq '.assets[].name'
-
-# npm package landed with provenance
-npm view @openthink/audit@0.2.0 dist
-npm view @openthink/audit@0.2.0 _npmUser  # should show OIDC publisher
-
-# Quick install smoke test
-npm install -g @openthink/audit@0.2.0
-oaudit --version    # should print 0.2.0
-oaudit explain trusted/security | head -5
-```
-
-## When `dist init` regenerates the workflow
-
-`dist init` and `dist generate` will try to overwrite
-`.github/workflows/release.yml` with their own tag-triggered version. Our
-workflow is a custom rewrite — push-to-main + version detection, matching
-the OpenThinkAi pattern (stamp-cli, ui-leaf). `allow-dirty = ["ci"]` in
-`Cargo.toml` tells dist to leave the file alone.
-
-If you regenerate, restore the workflow from git instead of re-applying
-the dist default.
+To upgrade dist or change its config: bump `cargo-dist-version`, run
+`dist generate`, then use `git diff` to re-apply the marked patches that the
+regeneration dropped. To bump a pinned Action, update its SHA (and `# vX.Y.Z`
+comment) in both `github-action-commits` and `release.yml`; resolve a tag
+with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (dereference annotated
+tags to the commit).

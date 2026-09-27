@@ -53,9 +53,8 @@ permissions:
 #      logic so a created-but-not-uploaded release could be recovered by
 #      re-pushing. dist's host job manages the release lifecycle through
 #      its own draft → upload → release steps. If a run fails mid-flight
-#      (npm publish fails, network blip during upload), the recovery
-#      procedure is: delete the partial GitHub Release manually, then
-#      re-trigger by pushing any commit. See RELEASING.md.
+#      (npm publish fails, network blip during upload), see the recovery
+#      procedure in RELEASING.md.
 #
 #   2. No PR-time `dist plan` check. The previous workflow ran on PRs
 #      to catch "this won't build" before merge. We rely on the stamp-loop
