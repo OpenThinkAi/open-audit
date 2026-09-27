@@ -145,7 +145,9 @@ fn locate(token: &str, repo_root: &Path, subject_owns_catalog: bool) -> Result<L
                 .join(".oaudit")
                 .join("auditors")
                 .join(format!("{token}.md"));
-            let untrusted = token.starts_with(Mode::Untrusted.as_str());
+            let untrusted = token
+                .split_once('/')
+                .is_some_and(|(mode, _)| mode == Mode::Untrusted.as_str());
             if local.is_file() {
                 if !(untrusted && subject_owns_catalog) {
                     return Ok(Located::Local(local));

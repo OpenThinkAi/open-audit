@@ -84,7 +84,7 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             parts.push(format!("{} withheld as possible secrets", stats.skipped_secret));
         }
         println!("{}", dim.apply_to(format!("skipped: {}", parts.join(", "))));
-        if stats.skipped_files.is_empty() {
+        if show_io_samples(stats) {
             for sample in &stats.io_error_samples {
                 println!("{}", dim.apply_to(format!("  - {}", clean(sample))));
             }
@@ -197,6 +197,16 @@ fn severity_counts(findings: &[Finding]) -> SeverityCounts {
     c
 }
 
+/// Untrusted runs list unreadable files by path in `skipped_files`;
+/// trusted runs only record secrets there, so the samples are then the
+/// only I/O detail and must still be shown.
+fn show_io_samples(stats: &GatherStats) -> bool {
+    !stats
+        .skipped_files
+        .iter()
+        .any(|s| matches!(s.reason, crate::evidence::SkipReason::Unreadable { .. }))
+}
+
 fn has_skips(stats: &GatherStats) -> bool {
     stats.skipped_too_large > 0
         || stats.skipped_binary > 0
@@ -219,6 +229,23 @@ pub(crate) fn exit_code(report: &AuditReport) -> u8 {
 mod tests {
     use super::*;
     use crate::finding::{Confidence, Location};
+
+    #[test]
+    fn io_samples_survive_a_withheld_secret_in_trusted_mode() {
+        use crate::evidence::{SkipReason, SkippedFile};
+        let mut stats = GatherStats::default();
+        stats.skipped_io_error = 1;
+        stats.io_error_samples.push("x: permission denied".into());
+        stats.skipped_secret = 1;
+        stats.skipped_files.push(SkippedFile { path: ".env".into(), reason: SkipReason::PossibleSecret });
+        assert!(show_io_samples(&stats));
+
+        stats.skipped_files.push(SkippedFile {
+            path: "x".into(),
+            reason: SkipReason::Unreadable { error: "permission denied".into() },
+        });
+        assert!(!show_io_samples(&stats));
+    }
 
     #[test]
     fn clean_strips_escape_sequences_but_keeps_layout() {

@@ -100,12 +100,18 @@ fn unaudited_files_finding(stats: &GatherStats) -> Option<Finding> {
         .take(50)
         .map(|s| format!("{} ({})", s.path, s.reason))
         .collect();
-    let more = skipped.len().saturating_sub(listing.len());
+    // The list is capped; the counters are authoritative.
+    let total = (stats.skipped_too_large
+        + stats.skipped_binary
+        + stats.skipped_io_error
+        + stats.skipped_secret)
+        .max(skipped.len() as u32) as usize;
+    let more = total.saturating_sub(listing.len());
     Some(Finding {
         id: "oaudit-unaudited-files".to_string(),
         severity: if only_binary { Severity::Low } else { Severity::Medium },
         confidence: Confidence::High,
-        title: format!("{} file(s) were not shown to the auditor", skipped.len()),
+        title: format!("{total} file(s) were not shown to the auditor"),
         location: Location { file: first.path.clone(), line: 0, end_line: None },
         additional_locations: Vec::new(),
         evidence: format!(
@@ -209,9 +215,10 @@ fn build_user_prompt(chunks: &[crate::evidence::EvidenceChunk]) -> String {
     out
 }
 
-/// 128 bits from two independently-keyed SipHash instances. std's
-/// `RandomState` is seeded from the OS RNG, which is plenty for a fence
-/// the subject only has to fail to guess.
+/// 128 bits from two SipHash outputs. std's `RandomState` keys are seeded
+/// from the OS RNG once per thread and incremented per instance, so the
+/// words differ but aren't independent; unguessable by the subject is all
+/// a fence needs.
 fn fresh_nonce() -> String {
     use std::hash::{BuildHasher, Hasher};
     let word = || {
@@ -228,16 +235,18 @@ fn fresh_nonce() -> String {
 }
 
 fn escape_attr(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            '"' => "&quot;".chars().collect::<Vec<_>>(),
-            '<' => "&lt;".chars().collect(),
-            '>' => "&gt;".chars().collect(),
-            '&' => "&amp;".chars().collect(),
-            c if c.is_control() => c.escape_unicode().collect(),
-            c => vec![c],
-        })
-        .collect()
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            c if c.is_control() => out.extend(c.escape_unicode()),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Parse a JSON array of findings from the model's response. Tolerates
