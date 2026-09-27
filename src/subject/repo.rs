@@ -47,6 +47,23 @@ pub(crate) async fn open(target: &str) -> Result<Repo> {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| repo.path().to_path_buf());
 
+    // discover() walks UPWARD, so a plain directory inside a larger repo
+    // (e.g. ~/Downloads/x under a dotfiles-managed $HOME) would silently
+    // widen the audit to that whole repo. Refuse unless the path the user
+    // gave IS the repo root.
+    let root_canonical = root
+        .canonicalize()
+        .with_context(|| format!("resolving repository root {}", root.display()))?;
+    if root_canonical != canonical {
+        bail!(
+            "`{target}` is inside a larger git repository rooted at {root}; auditing it as a repo \
+             would audit that whole repository.\n  \
+             To audit the whole repository: oaudit repo {root}\n  \
+             To audit just this directory: oaudit file {target}",
+            root = root_canonical.display()
+        );
+    }
+
     Ok(Repo {
         root,
         _tempdir: None,
@@ -126,16 +143,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opens_repo_from_subdir() {
+    async fn rejects_subdir_of_a_larger_repo() {
         let tmp = tempdir().unwrap();
         init_git_repo(tmp.path());
         let subdir = tmp.path().join("nested");
         std::fs::create_dir(&subdir).unwrap();
-        let repo = open(subdir.to_str().unwrap()).await.unwrap();
-        // root anchors at the worktree, not the subdir we passed in
-        assert_eq!(
-            repo.root.canonicalize().unwrap(),
-            tmp.path().canonicalize().unwrap()
-        );
+        let err = open(subdir.to_str().unwrap()).await.unwrap_err();
+        let msg = err.to_string();
+        let root = tmp.path().canonicalize().unwrap();
+        assert!(msg.contains("inside a larger git repository"), "got: {msg}");
+        assert!(msg.contains(&format!("oaudit repo {}", root.display())), "got: {msg}");
+        assert!(msg.contains("oaudit file"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn opens_nested_repo_at_its_own_root() {
+        // A repo nested inside another repo is fine when pointed at directly:
+        // discover() stops at the nearest .git, which is the given path.
+        let tmp = tempdir().unwrap();
+        init_git_repo(tmp.path());
+        let inner = tmp.path().join("inner");
+        std::fs::create_dir(&inner).unwrap();
+        init_git_repo(&inner);
+        let repo = open(inner.to_str().unwrap()).await.unwrap();
+        assert_eq!(repo.root.canonicalize().unwrap(), inner.canonicalize().unwrap());
     }
 }
