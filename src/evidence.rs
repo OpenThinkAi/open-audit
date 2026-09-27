@@ -139,9 +139,6 @@ impl GatherStats {
     /// Fold another gather's stats into this one (multi-spec runs).
     /// Counters add; `skipped_files` is de-duplicated by `(path, reason)`
     /// since several specs gathering the same subject hit the same skips.
-    /// Replaces run.rs's field-by-field `merge_stats`, which predates the
-    /// new fields; unused until run.rs switches over.
-    #[allow(dead_code)]
     pub(crate) fn merge(&mut self, from: &GatherStats) {
         self.skipped_too_large += from.skipped_too_large;
         self.skipped_binary += from.skipped_binary;
@@ -227,6 +224,7 @@ pub(crate) struct EvidenceFile {
 /// is, secret denylist on). Multi-spec callers should prefer
 /// `gather_with(.., &GatherOptions::for_specs(specs, ..))` so one
 /// untrusted spec switches the whole run to the unfiltered walk.
+#[cfg(test)]
 pub(crate) fn gather(
     subject: &Subject,
     spec: &Spec,

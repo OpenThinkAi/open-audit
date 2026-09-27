@@ -25,6 +25,9 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         skipped_too_large: u32,
         skipped_binary: u32,
         skipped_io_error: u32,
+        skipped_secret: u32,
+        decoded_lossily: u32,
+        skipped_files: &'a [crate::evidence::SkippedFile],
         io_error_samples: &'a [String],
         /// True when `skipped_io_error > io_error_samples.len()`. Lets
         /// downstream tooling know the sample list isn't the full picture.
@@ -37,6 +40,9 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             skipped_too_large: stats.skipped_too_large,
             skipped_binary: stats.skipped_binary,
             skipped_io_error: stats.skipped_io_error,
+            skipped_secret: stats.skipped_secret,
+            decoded_lossily: stats.decoded_lossily,
+            skipped_files: &stats.skipped_files,
             io_error_samples: &stats.io_error_samples,
             io_error_samples_truncated: truncated,
         },
@@ -74,9 +80,20 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         if stats.skipped_io_error > 0 {
             parts.push(format!("{} I/O error", stats.skipped_io_error));
         }
+        if stats.skipped_secret > 0 {
+            parts.push(format!("{} withheld as possible secrets", stats.skipped_secret));
+        }
         println!("{}", dim.apply_to(format!("skipped: {}", parts.join(", "))));
-        for sample in &stats.io_error_samples {
-            println!("{}", dim.apply_to(format!("  - {}", clean(sample))));
+        if stats.skipped_files.is_empty() {
+            for sample in &stats.io_error_samples {
+                println!("{}", dim.apply_to(format!("  - {}", clean(sample))));
+            }
+        }
+        for skip in &stats.skipped_files {
+            println!(
+                "{}",
+                dim.apply_to(format!("  - {} ({})", clean(&skip.path), clean(&skip.reason.to_string())))
+            );
         }
     }
     println!();
@@ -181,7 +198,10 @@ fn severity_counts(findings: &[Finding]) -> SeverityCounts {
 }
 
 fn has_skips(stats: &GatherStats) -> bool {
-    stats.skipped_too_large > 0 || stats.skipped_binary > 0 || stats.skipped_io_error > 0
+    stats.skipped_too_large > 0
+        || stats.skipped_binary > 0
+        || stats.skipped_io_error > 0
+        || stats.skipped_secret > 0
 }
 
 /// Determine the process exit code from the report. v1 rule: any
