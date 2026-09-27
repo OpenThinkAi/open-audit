@@ -17,9 +17,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Audit a git repository (URL to clone, or local git path).
+    /// Audit a local git repository (cloning from a URL is not supported yet).
     Repo {
-        /// URL or local path to a git repository.
+        /// Local path to a git repository's working tree.
         target: String,
 
         /// Comma-separated specs to audit against
@@ -105,7 +105,8 @@ pub enum Command {
         open: bool,
     },
 
-    /// Scaffold .oaudit/ in the current directory.
+    /// Scaffold .oaudit/ in the current directory. Hidden until implemented.
+    #[command(hide = true)]
     Init,
 
     /// Update oaudit to the latest release.
