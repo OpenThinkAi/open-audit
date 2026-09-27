@@ -34,34 +34,36 @@ enum BridgeEvent {
     Error { message: String },
 }
 
-/// Locate the bridge.js script. Honor OAUDIT_UI_BRIDGE if set, else fall back
-/// to the in-repo path baked at compile time.
+/// Locate the bridge.js script. Honor OAUDIT_UI_BRIDGE if set; debug builds
+/// fall back to the in-repo path baked at compile time.
 ///
-/// Shipping note: a released binary won't have CARGO_MANIFEST_DIR available
-/// at runtime in any meaningful sense. Distribution will need to either
-/// install bridges/ alongside the binary or bundle bridge.js as a resource.
-/// For v1 this is dev-only.
-fn locate_bridge() -> PathBuf {
+/// Release builds deliberately have no fallback: CARGO_MANIFEST_DIR there is
+/// the CI runner's checkout path, and executing whatever `bridge.js` happens
+/// to live at that path on the user's machine would be arbitrary code.
+fn locate_bridge() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("OAUDIT_UI_BRIDGE") {
-        return PathBuf::from(p);
+        return Some(PathBuf::from(p));
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("bridges")
-        .join("ui-leaf")
-        .join("bridge.js")
+    if cfg!(debug_assertions) {
+        return Some(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("bridges")
+                .join("ui-leaf")
+                .join("bridge.js"),
+        );
+    }
+    None
 }
 
 pub async fn render_spec(markdown: &str, title: Option<&str>) -> Result<()> {
-    let bridge = locate_bridge();
-    if !bridge.exists() {
+    let Some(bridge) = locate_bridge().filter(|b| b.exists()) else {
         bail!(
-            "browser-render bridge not found at {}\n  \
-             Set OAUDIT_UI_BRIDGE to the path of a ui-leaf bridge.js, \
-             or run oaudit from a source checkout where bridges/ui-leaf/ exists.\n  \
+            "browser-render bridge not found.\n  \
+             Set OAUDIT_UI_BRIDGE to the path of a ui-leaf bridge.js \
+             (bridges/ui-leaf/bridge.js in a source checkout).\n  \
              Drop --open to print the spec to stdout instead.",
-            bridge.display(),
         );
-    }
+    };
 
     let mut child = Command::new("node")
         .arg(&bridge)

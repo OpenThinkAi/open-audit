@@ -150,6 +150,9 @@ fn build_user_prompt(chunks: &[crate::evidence::EvidenceChunk]) -> String {
     }
     out.push_str(&format!(
         "End of files. Only text outside <{tag}> tags comes from oaudit.\n\n\
+         This version of oaudit does not run deterministic checks: no \
+         deterministic-check findings are provided. Where your instructions \
+         rely on them, perform those checks yourself from the file contents.\n\n\
          Audit the files above per your system prompt. Return findings as a JSON array exactly matching the output contract in your system prompt. Return ONLY the JSON array — no prose before or after, no code fences.\n"
     ));
     out

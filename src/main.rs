@@ -14,7 +14,6 @@ mod output;
 mod render;
 mod resolve;
 mod run;
-mod sandbox;
 mod spec;
 mod subject;
 mod update;
