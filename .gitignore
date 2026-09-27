@@ -11,3 +11,9 @@ Cargo.lock.bak
 # Node bridge: deps installed locally via npm. node_modules is huge;
 # package-lock.json is committed for reproducible installs + supply-chain audit.
 bridges/*/node_modules/
+
+# Local release/packaging output and per-user agent state
+/*.tar.gz
+/*.tgz
+.claude/settings.local.json
+.claude/worktrees/
