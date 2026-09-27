@@ -189,8 +189,8 @@ async fn audit_repo(
     format: Format,
 ) -> Result<u8> {
     let cwd = std::env::current_dir()?;
-    let specs = resolve::resolve(against, &cwd)?;
     let repo = crate::subject::repo::open(target).await?;
+    let specs = resolve::resolve_for_subject(against, &cwd, Some(&repo.root))?;
     let subject = crate::subject::Subject::Repo(repo);
     audit(&subject, &specs, scope, format).await
 }
@@ -202,8 +202,15 @@ async fn audit_file(
     format: Format,
 ) -> Result<u8> {
     let cwd = std::env::current_dir()?;
-    let specs = resolve::resolve(against, &cwd)?;
     let file = crate::subject::file::open(target).await?;
+    // A single file's "tree" is its directory: `cd evil && oaudit file x.js`
+    // must not read evil/.oaudit/ either.
+    let subject_dir = if file.root.is_file() {
+        file.root.parent().unwrap_or(&file.root)
+    } else {
+        &file.root
+    };
+    let specs = resolve::resolve_for_subject(against, &cwd, Some(subject_dir))?;
     let subject = crate::subject::Subject::File(file);
     audit(&subject, &specs, scope, format).await
 }

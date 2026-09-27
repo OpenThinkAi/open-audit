@@ -1,13 +1,19 @@
 //! Resolve `--against` strings into a list of `Spec`s.
 //!
 //! Resolution per comma-separated value:
-//! - Path-shaped (contains `/` or `.`) AND points at an existing file → `File`
 //! - `<mode>/<name>` (catalog form) → repo-local `.oaudit/auditors/<mode>/<name>.md`
-//!   first (`Local`), else embedded built-in (`Builtin`)
+//!   first (`Local`), else embedded built-in (`Builtin`). Checked before the
+//!   path form so a stray file named `untrusted/security` can't shadow it.
+//! - Path-shaped (contains `/` or `.`) AND points at an existing file → `File`
 //! - Bare name (no slash, no dot) → ambiguous-error with the available builtins listed
 //!
 //! `<mode>` must be one of `Mode::ALL` (currently `trusted`, `untrusted`).
 //! Unknown-mode catalog tokens get a tailored error pointing at the typo.
+//!
+//! Untrusted subjects don't get to pick their own auditor: when cwd is inside
+//! the subject, repo-local overrides of `untrusted/*` are ignored in favour
+//! of the built-in. A local catalog spec must also declare the same `mode:`
+//! as its catalog path, so `untrusted/x.md` can't quietly run as trusted.
 
 use crate::builtins;
 use crate::spec::{self, Mode, Spec, SpecSource};
@@ -35,13 +41,26 @@ enum CatalogShape<'a> {
 }
 
 pub(crate) fn resolve(against: &str, repo_root: &Path) -> Result<Vec<Spec>> {
+    resolve_for_subject(against, repo_root, None)
+}
+
+/// Like `resolve`, but aware of the subject being audited. If `repo_root`
+/// (the cwd whose `.oaudit/` we'd read) lies inside `subject_root`, the
+/// subject itself is supplying the local catalog — so `untrusted/*` tokens
+/// skip the local override and use the built-in.
+pub(crate) fn resolve_for_subject(
+    against: &str,
+    repo_root: &Path,
+    subject_root: Option<&Path>,
+) -> Result<Vec<Spec>> {
+    let subject_owns_catalog = subject_root.is_some_and(|s| is_within(repo_root, s));
     let mut out = Vec::new();
     for raw in against.split(',') {
         let token = raw.trim();
         if token.is_empty() {
             continue;
         }
-        out.push(resolve_one(token, repo_root)?);
+        out.push(resolve_token(token, repo_root, subject_owns_catalog)?);
     }
     if out.is_empty() {
         bail!("--against requires at least one spec");
@@ -49,18 +68,44 @@ pub(crate) fn resolve(against: &str, repo_root: &Path) -> Result<Vec<Spec>> {
     Ok(out)
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_one(token: &str, repo_root: &Path) -> Result<Spec> {
-    match locate(token, repo_root)? {
+    resolve_token(token, repo_root, false)
+}
+
+fn resolve_token(token: &str, repo_root: &Path, subject_owns_catalog: bool) -> Result<Spec> {
+    match locate(token, repo_root, subject_owns_catalog)? {
         Located::File(path) => load_path(&path, SpecSource::AdHoc(path.clone())),
-        Located::Local(path) => load_path(&path, SpecSource::Local(path.clone())),
+        Located::Local(path) => {
+            let spec = load_path(&path, SpecSource::Local(path.clone()))?;
+            let (mode, _) = token.split_once('/').unwrap_or_default();
+            if spec.meta.mode.as_str() != mode {
+                bail!(
+                    "local spec {} is catalogued as `{mode}` but declares `mode: {}`; \
+                     the frontmatter mode must match its directory",
+                    path.display(),
+                    spec.meta.mode.as_str(),
+                );
+            }
+            Ok(spec)
+        }
         Located::Builtin(b) => spec::parse(b.body, SpecSource::Builtin(b.catalog_path)),
+    }
+}
+
+/// True when `inner` is `outer` or below it (after canonicalising both;
+/// unresolvable paths count as not-within).
+fn is_within(inner: &Path, outer: &Path) -> bool {
+    match (inner.canonicalize(), outer.canonicalize()) {
+        (Ok(i), Ok(o)) => i.starts_with(o),
+        _ => false,
     }
 }
 
 /// Lookup the raw, unparsed text of a spec for display (no frontmatter
 /// stripping). Returns `(full_markdown, display_label)`.
 pub(crate) fn lookup_raw(token: &str, repo_root: &Path) -> Result<(String, String)> {
-    match locate(token, repo_root)? {
+    match locate(token, repo_root, false)? {
         Located::File(path) => {
             let body = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading spec file {}", path.display()))?;
@@ -75,9 +120,9 @@ pub(crate) fn lookup_raw(token: &str, repo_root: &Path) -> Result<(String, Strin
     }
 }
 
-/// Shared lookup chain: file path, then catalog (local first, then builtin),
-/// with tailored errors for each not-found case.
-fn locate(token: &str, repo_root: &Path) -> Result<Located> {
+/// Shared lookup chain: catalog (local first, then builtin), then file
+/// path, with tailored errors for each not-found case.
+fn locate(token: &str, repo_root: &Path, subject_owns_catalog: bool) -> Result<Located> {
     let path_shaped = token.contains('/') || token.contains('.');
     if !path_shaped {
         bail!(
@@ -86,19 +131,29 @@ fn locate(token: &str, repo_root: &Path) -> Result<Located> {
         );
     }
 
-    let raw_path = Path::new(token);
-    if raw_path.is_file() {
-        return Ok(Located::File(raw_path.to_path_buf()));
+    let shape = catalog_shape(token);
+    if !matches!(shape, CatalogShape::Known) {
+        let raw_path = Path::new(token);
+        if raw_path.is_file() {
+            return Ok(Located::File(raw_path.to_path_buf()));
+        }
     }
 
-    match catalog_shape(token) {
+    match shape {
         CatalogShape::Known => {
             let local = repo_root
                 .join(".oaudit")
                 .join("auditors")
                 .join(format!("{token}.md"));
+            let untrusted = token.starts_with(Mode::Untrusted.as_str());
             if local.is_file() {
-                return Ok(Located::Local(local));
+                if !(untrusted && subject_owns_catalog) {
+                    return Ok(Located::Local(local));
+                }
+                eprintln!(
+                    "oaudit: ignoring {} — the subject can't supply its own untrusted auditor; using the built-in",
+                    local.display()
+                );
             }
             if let Some(b) = builtins::all().iter().find(|b| b.catalog_path == token) {
                 return Ok(Located::Builtin(b));
@@ -252,6 +307,39 @@ mod tests {
         let spec = resolve_one("trusted/security", tmp.path()).unwrap();
         assert!(matches!(spec.source, SpecSource::Local(_)));
         assert!(spec.body.contains("local-override"));
+    }
+
+    fn write_local(root: &Path, mode_dir: &str, frontmatter_mode: &str, body: &str) {
+        let dir = root.join(".oaudit/auditors").join(mode_dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("security.md"),
+            format!("---\nname: security\nmode: {frontmatter_mode}\nkind: prompt\n---\n{body}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn subject_cannot_supply_its_own_untrusted_auditor() {
+        let tmp = tempdir().unwrap();
+        write_local(tmp.path(), "untrusted", "untrusted", "return []");
+        // cwd == subject root: the local override is ignored.
+        let specs =
+            resolve_for_subject("untrusted/security", tmp.path(), Some(tmp.path())).unwrap();
+        assert!(matches!(specs[0].source, SpecSource::Builtin(_)));
+        // cwd outside the subject: the local override is the user's own.
+        let other = tempdir().unwrap();
+        let specs =
+            resolve_for_subject("untrusted/security", tmp.path(), Some(other.path())).unwrap();
+        assert!(matches!(specs[0].source, SpecSource::Local(_)));
+    }
+
+    #[test]
+    fn local_spec_mode_must_match_catalog_dir() {
+        let tmp = tempdir().unwrap();
+        write_local(tmp.path(), "untrusted", "trusted", "sneaky");
+        let err = resolve_one("untrusted/security", tmp.path()).unwrap_err();
+        assert!(format!("{err:#}").contains("must match"), "got: {err:#}");
     }
 
     #[test]
