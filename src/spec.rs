@@ -29,9 +29,10 @@ impl Mode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
+    #[default]
     Prompt,
     Deterministic,
     Hybrid,
@@ -49,6 +50,8 @@ pub struct DefaultScope {
 pub struct SpecMeta {
     pub name: String,
     pub mode: Mode,
+    /// Informational today; optional so custom specs can omit it.
+    #[serde(default)]
     pub kind: Kind,
     #[serde(default)]
     pub default_scope: Option<DefaultScope>,
@@ -112,6 +115,13 @@ mod tests {
     }
 
     #[test]
+    fn kind_is_optional_and_defaults_to_prompt() {
+        let spec = parse("---\nname: t\nmode: untrusted\n---\nbody\n", SpecSource::Builtin("t"))
+            .unwrap();
+        assert_eq!(spec.meta.kind, Kind::Prompt);
+    }
+
+    #[test]
     fn parses_full_frontmatter() {
         let text = "---\n\
             name: security\n\
@@ -154,10 +164,10 @@ mod tests {
 
     #[test]
     fn missing_required_field_errors() {
-        // missing `kind`
-        let text = "---\nname: test\nmode: trusted\n---\nbody\n";
+        // missing `mode` (`kind` is optional)
+        let text = "---\nname: test\nkind: prompt\n---\nbody\n";
         let err = parse(text, SpecSource::Builtin("test")).unwrap_err();
-        assert!(format!("{err:#}").to_lowercase().contains("kind"));
+        assert!(format!("{err:#}").to_lowercase().contains("mode"));
     }
 
     #[test]

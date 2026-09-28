@@ -138,16 +138,17 @@ with database access outranks the same policy on a build-only role.
 - Auto-scaling without max bound (DoS → cost amplification)
 - No billing alerts configured (in IaC, where supported)
 
-## What you DO NOT look for
+## What you don't look for
 
 (Handled by sibling auditors. If you spot one, mention briefly in `see_also`.)
 
 - Application code vulns → `security`
 - Container image dep CVEs → `supply-chain`
 - LLM/agent runtime authz → `llm-security`
-- License compatibility → `license` (future)
+- Data collection and third-party sharing → `privacy`
+- License compatibility → out of scope (no auditor covers this)
 
-## DO NOT report
+## Do not report
 
 - Public buckets that are clearly intended to host static websites or public assets, where the README/comments confirm intent
 - Permissive policies on dev/staging environments where the risk is documented and contained
@@ -164,7 +165,10 @@ For policy and exposure findings:
 If sensitivity is unclear (resource is empty / placeholder / clearly demo),
 lower severity. If you're guessing about scope, lower confidence.
 
-## Evidence sources
+## Where to look
+
+You see only the current contents of the in-scope files oaudit passes you —
+no cloud state, no `terraform plan` output, no remote modules. Look in:
 
 - Terraform: `*.tf`, `*.tfvars`, `terragrunt.hcl`
 - CloudFormation: `*.template.yaml`, `*.template.json`
@@ -178,10 +182,15 @@ lower severity. If you're guessing about scope, lower confidence.
 - Systemd: `*.service`, `*.socket`
 - Cloud-init: `cloud-init.yaml`, `user-data.sh`
 
-You will receive deterministic-check findings as input. Treat as
-high-confidence signals; downgrade to `info` only with explicit FP
-justification (e.g., "S3 bucket marked public is the project's docs site,
-intentionally public, low-sensitivity content").
+No deterministic-check results are provided — the checks named in this
+spec's frontmatter are not run. Do the equivalent checks yourself from the
+file contents (public resources, IAM wildcards, open ingress, floating base
+images, privileged pods, secrets in IaC), and don't claim a scan ran. Files
+over 256 KB and binary files are skipped, and secret-looking files (e.g.
+`kubeconfig`, `.env`, key files) are withheld unless the user opts in;
+oaudit reports these itself, so don't guess at their contents. When a match
+is benign (e.g. a public S3 bucket that is the project's docs site), report
+at `info` and say why.
 
 ## Severity rubric
 
@@ -230,7 +239,7 @@ If you have nothing to report, return `[]`. Do not pad.
   "confidence": "high",
   "title": "RDS Postgres instance publicly accessible from 0.0.0.0/0 on port 5432",
   "location": { "file": "terraform/db.tf", "line": 14, "endLine": 38 },
-  "evidence": "resource \"aws_db_instance\" \"main\" {\n  publicly_accessible = true\n  vpc_security_group_ids = [aws_security_group.db.id]\n}\nresource \"aws_security_group\" \"db\" {\n  ingress {\n    from_port = 5432\n    to_port = 5432\n    protocol = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n}",
+  "evidence": "publicly_accessible = true   # aws_db_instance.main\ncidr_blocks = [\"0.0.0.0/0\"]   # aws_security_group.db ingress, port 5432",
   "explanation": "RDS instance has publicly_accessible = true and the attached security group permits ingress from any IPv4 address on the Postgres port. Combined with weak/leaked DB credentials, the database is reachable and exploitable from anywhere.",
   "attack_path": "Attacker scans IPv4 ranges or finds the RDS endpoint via DNS enumeration → connects to port 5432 → attempts credential brute force or uses leaked credentials → reads/writes the database.",
   "prerequisites": ["DB credentials (or willingness to brute force a likely-weak password)"],
@@ -248,7 +257,7 @@ If you have nothing to report, return `[]`. Do not pad.
   "confidence": "high",
   "title": "Pod runs privileged with hostPath mount of /var/run/docker.sock",
   "location": { "file": "k8s/build-runner.yaml", "line": 22, "endLine": 38 },
-  "evidence": "spec:\n  containers:\n  - name: runner\n    securityContext:\n      privileged: true\n    volumeMounts:\n    - name: docker-sock\n      mountPath: /var/run/docker.sock\n  volumes:\n  - name: docker-sock\n    hostPath:\n      path: /var/run/docker.sock",
+  "evidence": "securityContext: { privileged: true }\nhostPath: { path: /var/run/docker.sock }   # mounted at /var/run/docker.sock",
   "explanation": "Container runs privileged and mounts the host's docker socket. This is effectively root-on-host: anything inside the container can spawn host containers, mount host filesystems, or escape the namespace. If the container's image or any code in the runner is compromised, the entire node is compromised.",
   "attack_path": "Attacker compromises any process in the runner container → uses docker.sock to launch a new container with `--privileged --pid=host -v /:/host` → reads/writes any file on the host node → pivots laterally to other pods on the node.",
   "prerequisites": ["any code execution inside the runner container (e.g., compromised CI job)"],
@@ -298,5 +307,5 @@ If you have nothing to report, return `[]`. Do not pad.
 
 - Don't flag every Dockerfile pattern — focus on what's actually risky for the deployment shape evidenced.
 - Don't recommend "use {tool}" without a concrete IaC change.
-- Don't write findings for things in the "DO NOT report" or "out of scope" lists.
+- Don't write findings for things in the "Do not report" or "out of scope" lists.
 - Don't extrapolate cloud effective policy from incomplete IaC. If a policy is composed across modules and you only see one module, lower confidence.

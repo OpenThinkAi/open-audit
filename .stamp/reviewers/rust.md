@@ -70,16 +70,18 @@ has one caller.
 
 ## Project-specific Rust patterns
 
-- **Long-lived subprocess.** `src/claude_session.rs` wraps a kept-alive
-  `tokio::process::Child`. Diffs touching it should preserve: graceful
-  shutdown on `Drop`, line-delimited JSON I/O on stdin/stdout, error
-  surfacing on process death (not silent restart).
+- **Per-spec subprocess.** `src/claude_session.rs` spawns one `claude`
+  child per spec (`query_claude`). Diffs touching it should preserve:
+  `kill_on_drop` plus the timeout, concurrent stderr draining (so a chatty
+  child can't deadlock), line-delimited stream-json parsed through the
+  typed `StreamEvent` enum with an `Other` fallback, and error surfacing on
+  process death (not silent retry).
 - **Frontmatter parsing.** Specs use YAML frontmatter via `gray_matter`.
   Frontmatter MUST deserialize into `SpecMeta` (the typed schema in
   `src/spec.rs`), not into `serde_yaml::Value`. Untyped intermediate
   values are a flag.
 - **Embedded built-ins.** `src/builtins.rs` uses `include_str!` to bake
-  the 10 spec docs into the binary. Diffs that load them at runtime
+  the spec docs into the binary. Diffs that load them at runtime
   instead should justify the change (versioning, hot-reload for development,
   etc.) — bare runtime loading is the wrong default.
 - **Tokio runtime shape.** Single `#[tokio::main]` in `main.rs`. Don't
@@ -106,7 +108,7 @@ has one caller.
 
 ## What you do NOT check
 
-- Security surfaces (secrets, sandbox invariants, path traversal,
+- Security surfaces (secrets, claude-child isolation, path traversal,
   trust-model changes) → **security** reviewer.
 - User-facing impact (CLI surface, output format, command shape) → **product** reviewer.
 - Spec-doc CONTENT (the auditor markdown bodies in `.oaudit/auditors/`) —
