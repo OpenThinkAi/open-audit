@@ -12,16 +12,17 @@ GitHub Release of `oaudit` receives security fixes. Upgrade promptly.
 Use GitHub's private vulnerability reporting for this repository:
 <https://github.com/OpenThinkAi/open-audit/security/advisories/new>
 
-Include:
+If that page isn't available, open a public issue that says only that you
+have a security report and would like a private contact. Don't include any
+details in it.
+
+Include in the report:
 
 - A description of the issue and the affected component (CLI, subject
   loading, the `claude` subprocess invocation, built-in specs, the ui-leaf
   bridge, release artifacts).
 - A reproduction or proof of concept, if you have one.
 - Your assessment of impact.
-
-We aim to acknowledge reports within 3 business days and to credit
-reporters in the release notes unless they prefer otherwise.
 
 ## Threat model
 
@@ -40,10 +41,15 @@ reporters in the release notes unless they prefer otherwise.
   disabled, no MCP servers, no user or project settings or hooks loaded, and
   an empty temporary working directory. The model can only read the prompt
   oaudit gives it and return text.
+- **The subject can't choose its own auditor.** When you run oaudit from
+  inside the thing being audited, its `.oaudit/auditors/untrusted/*`
+  overrides are ignored, and subject files are fenced with a random per-run
+  marker so their content can't impersonate oaudit's instructions.
 - **Results are LLM judgments, not guarantees.** Findings can be wrong, and
   runs vary. A clean result is not proof that the code is safe. Audited
-  content can also attempt to prompt-inject the auditor; treat output from
-  untrusted code accordingly.
+  content can try to prompt-inject the auditor into a clean verdict; that
+  can't make anything run on your machine, but it can skew the result, so
+  treat a clean audit of untrusted code as one signal, not a clearance.
 
 ## Out of scope
 

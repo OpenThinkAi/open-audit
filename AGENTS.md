@@ -2,6 +2,57 @@
 
 Guidance for AI agents working in this repository.
 
+## What this is
+
+`oaudit` is a Rust CLI that audits a codebase, directory, file or stdin
+text against Markdown "spec" prompts, by sending the files to Claude through
+a locked-down `claude` CLI child process and parsing a JSON findings array
+back. See [README.md](./README.md) for the user-facing behaviour; keep it
+true when you change behaviour.
+
+## Build and test
+
+```sh
+cargo build --locked
+cargo test --locked        # thread count capped in .cargo/config.toml
+```
+
+Both run as stamp `required_checks` before every merge. A live test that
+calls `claude` is `#[ignore]`d; run it with
+`OAUDIT_TEST_LIVE=1 cargo test -- --ignored`.
+
+## Where things are
+
+- `src/cli.rs`: clap commands and dispatch. `--help` text lives here.
+- `src/resolve.rs`: turns `--against` into specs (catalog, local override,
+  file path).
+- `src/subject/`: `repo`, `file`, `text` subjects.
+- `src/evidence.rs`: walks the subject and decides what's sent (scope
+  globs, secret denylist, size caps, skip reporting).
+- `src/run.rs`: per-spec loop, prompt construction (nonce fences, closing
+  instructions), findings parsing, oaudit's own synthetic findings.
+- `src/claude_session.rs`: spawns and isolates `claude`, parses its
+  stream-json output, detects safeguards stops.
+- `src/output.rs`: JSON and human output, exit code.
+- `.oaudit/auditors/{trusted,untrusted}/*.md`: the built-in spec prompts,
+  embedded at compile time via `src/builtins.rs`.
+
+## Rules that must not break
+
+- The `claude` child runs with `ISOLATION_ARGS` (no tools, no settings,
+  no MCP, no slash commands, prompts denied) in an empty tempdir. Never
+  loosen these or run it in the subject's directory; auditing a repo would
+  execute that repo's `.claude` hooks. `--bare` is not an alternative (it
+  breaks OAuth).
+- Never execute anything from the subject.
+- A subject must not be able to pick or weaken its own auditor, hide files
+  from an untrusted audit, or forge prompt structure. See
+  `.stamp/reviewers/security.md` for the full list.
+- New built-in auditors ship as a `trusted/` + `untrusted/` pair when both
+  make sense, and are registered in `src/builtins.rs`.
+- Any behaviour change updates README.md (and `--help` in `cli.rs`) in the
+  same change.
+
 ## Where changes land
 
 - `origin` is a stamp server. Every change to `main` goes
