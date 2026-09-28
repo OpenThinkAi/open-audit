@@ -26,6 +26,7 @@ oaudit repo ./some-repo                         # default: untrusted/security
 oaudit repo . --against trusted/security,trusted/privacy --format human
 oaudit file ./vendor/pkg --against untrusted/supply-chain
 cat issue.md | oaudit text --label issue-42     # default: untrusted/llm-security
+oaudit file ./some-skill --against untrusted/agent-skill   # vet an agent skill
 oaudit list                                     # available specs
 oaudit explain untrusted/security               # read a spec
 ```
@@ -48,6 +49,28 @@ list, or a path to your own spec file. You can override a built-in by adding
 except that a subject can never supply its own `untrusted/*` auditor. If
 you run oaudit from inside the thing being audited, local `untrusted/*`
 overrides are ignored and the built-in is used.
+
+## Vetting agent skills
+
+`untrusted/agent-skill` is for deciding whether to install a third-party
+agent skill (a `SKILL.md` plus scripts), or similar instruction packages
+like slash commands, plugin manifests and hook configs. Instead of flagging
+every shell call or network request, it compares what the skill *says* it's
+for with what it actually does, and only reports capabilities the stated
+purpose doesn't need, or that the skill hides. A browser-testing skill that
+starts a dev server is fine; one that also reads `~/.aws/credentials` isn't.
+
+Every run includes a short inventory (purpose, capabilities, network
+destinations, writes, and an install / install with care / do not install
+verdict) so you can check the reasoning in seconds.
+`trusted/agent-skill` is the author-side version: it looks for leaked
+secrets, over-broad triggers and missing confirmation steps before you
+publish.
+
+If the subject contains code the model itself refuses to describe, oaudit
+reports a "safety filter stopped" finding rather than failing, since it
+almost always means something in there is malicious. It's critical under an
+`untrusted/*` spec and high under a `trusted/*` one; both close the gate.
 
 ## What happens to your files
 

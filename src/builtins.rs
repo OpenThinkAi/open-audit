@@ -27,6 +27,10 @@ pub const BUILTINS: &[Builtin] = &[
         body: include_str!("../.oaudit/auditors/trusted/privacy.md"),
     },
     Builtin {
+        catalog_path: "trusted/agent-skill",
+        body: include_str!("../.oaudit/auditors/trusted/agent-skill.md"),
+    },
+    Builtin {
         catalog_path: "untrusted/security",
         body: include_str!("../.oaudit/auditors/untrusted/security.md"),
     },
@@ -45,6 +49,10 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin {
         catalog_path: "untrusted/privacy",
         body: include_str!("../.oaudit/auditors/untrusted/privacy.md"),
+    },
+    Builtin {
+        catalog_path: "untrusted/agent-skill",
+        body: include_str!("../.oaudit/auditors/untrusted/agent-skill.md"),
     },
 ];
 
