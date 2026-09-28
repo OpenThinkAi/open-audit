@@ -25,6 +25,9 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         skipped_too_large: u32,
         skipped_binary: u32,
         skipped_io_error: u32,
+        skipped_secret: u32,
+        decoded_lossily: u32,
+        skipped_files: &'a [crate::evidence::SkippedFile],
         io_error_samples: &'a [String],
         /// True when `skipped_io_error > io_error_samples.len()`. Lets
         /// downstream tooling know the sample list isn't the full picture.
@@ -37,6 +40,9 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             skipped_too_large: stats.skipped_too_large,
             skipped_binary: stats.skipped_binary,
             skipped_io_error: stats.skipped_io_error,
+            skipped_secret: stats.skipped_secret,
+            decoded_lossily: stats.decoded_lossily,
+            skipped_files: &stats.skipped_files,
             io_error_samples: &stats.io_error_samples,
             io_error_samples_truncated: truncated,
         },
@@ -49,7 +55,7 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     let dim = Style::new().dim();
 
     // Header
-    println!("{}", style(format!("audit: {}", report.subject)).bold());
+    println!("{}", style(format!("audit: {}", clean(&report.subject))).bold());
     println!(
         "{}",
         dim.apply_to(format!(
@@ -57,7 +63,7 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             if report.specs_run.is_empty() {
                 "(none)".to_string()
             } else {
-                report.specs_run.join(", ")
+                clean(&report.specs_run.join(", "))
             }
         ))
     );
@@ -74,9 +80,20 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         if stats.skipped_io_error > 0 {
             parts.push(format!("{} I/O error", stats.skipped_io_error));
         }
+        if stats.skipped_secret > 0 {
+            parts.push(format!("{} withheld as possible secrets", stats.skipped_secret));
+        }
         println!("{}", dim.apply_to(format!("skipped: {}", parts.join(", "))));
-        for sample in &stats.io_error_samples {
-            println!("{}", dim.apply_to(format!("  - {sample}")));
+        if show_io_samples(stats) {
+            for sample in &stats.io_error_samples {
+                println!("{}", dim.apply_to(format!("  - {}", clean(sample))));
+            }
+        }
+        for skip in &stats.skipped_files {
+            println!(
+                "{}",
+                dim.apply_to(format!("  - {} ({})", clean(&skip.path), clean(&skip.reason.to_string())))
+            );
         }
     }
     println!();
@@ -119,16 +136,32 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
 
 fn print_finding(f: &Finding) {
     let sev = severity_tag(f.severity);
-    let location = format!("{}:{}", f.location.file, f.location.line);
-    println!("{} {} ({})", sev, style(&f.title).bold(), Style::new().dim().apply_to(location));
+    let location = format!("{}:{}", clean(&f.location.file), f.location.line);
+    println!(
+        "{} {} ({})",
+        sev,
+        style(clean(&f.title)).bold(),
+        Style::new().dim().apply_to(location)
+    );
     if let Some(spec) = &f.spec {
-        println!("  {}", Style::new().dim().apply_to(format!("from: {spec}")));
+        println!("  {}", Style::new().dim().apply_to(format!("from: {}", clean(spec))));
     }
-    println!("  {}", f.explanation);
+    println!("  {}", clean(&f.explanation));
     if !f.suggestion.is_empty() {
-        println!("  {}: {}", Style::new().green().apply_to("→"), f.suggestion);
+        println!("  {}: {}", Style::new().green().apply_to("→"), clean(&f.suggestion));
     }
     println!();
+}
+
+/// Strip control characters (keeping `\n` and `\t`) from text that came
+/// from the model or the subject. Otherwise an audited file can smuggle
+/// escape sequences through a finding: OSC 52 clipboard writes, cursor
+/// moves that paint over a CRITICAL, fake hyperlinks. JSON output doesn't
+/// need this; serde escapes control characters.
+fn clean(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect()
 }
 
 fn severity_tag(s: Severity) -> String {
@@ -164,8 +197,21 @@ fn severity_counts(findings: &[Finding]) -> SeverityCounts {
     c
 }
 
+/// Untrusted runs list unreadable files by path in `skipped_files`;
+/// trusted runs only record secrets there, so the samples are then the
+/// only I/O detail and must still be shown.
+fn show_io_samples(stats: &GatherStats) -> bool {
+    !stats
+        .skipped_files
+        .iter()
+        .any(|s| matches!(s.reason, crate::evidence::SkipReason::Unreadable { .. }))
+}
+
 fn has_skips(stats: &GatherStats) -> bool {
-    stats.skipped_too_large > 0 || stats.skipped_binary > 0 || stats.skipped_io_error > 0
+    stats.skipped_too_large > 0
+        || stats.skipped_binary > 0
+        || stats.skipped_io_error > 0
+        || stats.skipped_secret > 0
 }
 
 /// Determine the process exit code from the report. v1 rule: any
@@ -183,6 +229,29 @@ pub(crate) fn exit_code(report: &AuditReport) -> u8 {
 mod tests {
     use super::*;
     use crate::finding::{Confidence, Location};
+
+    #[test]
+    fn io_samples_survive_a_withheld_secret_in_trusted_mode() {
+        use crate::evidence::{SkipReason, SkippedFile};
+        let mut stats = GatherStats::default();
+        stats.skipped_io_error = 1;
+        stats.io_error_samples.push("x: permission denied".into());
+        stats.skipped_secret = 1;
+        stats.skipped_files.push(SkippedFile { path: ".env".into(), reason: SkipReason::PossibleSecret });
+        assert!(show_io_samples(&stats));
+
+        stats.skipped_files.push(SkippedFile {
+            path: "x".into(),
+            reason: SkipReason::Unreadable { error: "permission denied".into() },
+        });
+        assert!(!show_io_samples(&stats));
+    }
+
+    #[test]
+    fn clean_strips_escape_sequences_but_keeps_layout() {
+        let hostile = "ok\u{1b}]52;c;cm0gLXJmIH4=\u{7}\u{1b}[2Aline\n\tnext\r\u{9b}31m";
+        assert_eq!(clean(hostile), "ok]52;c;cm0gLXJmIH4=[2Aline\n\tnext31m");
+    }
 
     fn finding(severity: Severity) -> Finding {
         Finding {

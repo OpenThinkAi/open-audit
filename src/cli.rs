@@ -17,9 +17,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Audit a git repository (URL to clone, or local git path).
+    /// Audit a local git repository (cloning from a URL is not supported yet).
     Repo {
-        /// URL or local path to a git repository.
+        /// Local path to a git repository's working tree.
         target: String,
 
         /// Comma-separated specs to audit against
@@ -34,6 +34,12 @@ pub enum Command {
         /// limiting is not supported — use a custom spec file for that.
         #[arg(long)]
         scope: Option<String>,
+
+        /// Send files that look like secrets (`.env*`, private keys,
+        /// `.npmrc`, cloud credentials, …) to the model too. They're
+        /// withheld by default.
+        #[arg(long)]
+        include_secrets: bool,
 
         /// Output format.
         #[arg(long, value_enum, default_value_t = Format::Json)]
@@ -62,6 +68,11 @@ pub enum Command {
         /// limiting is not supported — use a custom spec file for that.
         #[arg(long)]
         scope: Option<String>,
+
+        /// Send files that look like secrets to the model too (withheld by
+        /// default). Required to audit such a file on its own.
+        #[arg(long)]
+        include_secrets: bool,
 
         /// Output format.
         #[arg(long, value_enum, default_value_t = Format::Json)]
@@ -105,7 +116,8 @@ pub enum Command {
         open: bool,
     },
 
-    /// Scaffold .oaudit/ in the current directory.
+    /// Scaffold .oaudit/ in the current directory. Hidden until implemented.
+    #[command(hide = true)]
     Init,
 
     /// Update oaudit to the latest release.
@@ -150,10 +162,10 @@ const DEFAULT_TEXT_AGAINST: &str = "untrusted/llm-security";
 
 pub async fn dispatch(cli: Cli) -> Result<u8> {
     match cli.command {
-        Command::Repo { target, against, scope, format } => {
-            audit_repo(&target, &against, scope.as_deref(), format).await
+        Command::Repo { target, against, scope, include_secrets, format } => {
+            audit_repo(&target, &against, scope.as_deref(), include_secrets, format).await
         }
-        Command::File { target, against, scope, format } => {
+        Command::File { target, against, scope, include_secrets, format } => {
             // `oaudit file -` is sugar for `oaudit text` with default label
             // `stdin`. Sniff before any path canonicalization so `-` doesn't
             // round-trip through a "path does not exist" error. The default
@@ -169,7 +181,7 @@ pub async fn dispatch(cli: Cli) -> Result<u8> {
                 return audit_text("stdin", against, format).await;
             }
             let against = against.as_deref().unwrap_or(DEFAULT_FILE_AGAINST);
-            audit_file(&target, against, scope.as_deref(), format).await
+            audit_file(&target, against, scope.as_deref(), include_secrets, format).await
         }
         Command::Text { label, against, format } => {
             let against = against.as_deref().unwrap_or(DEFAULT_TEXT_AGAINST);
@@ -186,26 +198,35 @@ async fn audit_repo(
     target: &str,
     against: &str,
     scope: Option<&str>,
+    include_secrets: bool,
     format: Format,
 ) -> Result<u8> {
     let cwd = std::env::current_dir()?;
-    let specs = resolve::resolve(against, &cwd)?;
     let repo = crate::subject::repo::open(target).await?;
+    let specs = resolve::resolve_for_subject(against, &cwd, Some(&repo.root))?;
     let subject = crate::subject::Subject::Repo(repo);
-    audit(&subject, &specs, scope, format).await
+    audit(&subject, &specs, scope, include_secrets, format).await
 }
 
 async fn audit_file(
     target: &std::path::Path,
     against: &str,
     scope: Option<&str>,
+    include_secrets: bool,
     format: Format,
 ) -> Result<u8> {
     let cwd = std::env::current_dir()?;
-    let specs = resolve::resolve(against, &cwd)?;
     let file = crate::subject::file::open(target).await?;
+    // A single file's "tree" is its directory: `cd evil && oaudit file x.js`
+    // must not read evil/.oaudit/ either.
+    let subject_dir = if file.root.is_file() {
+        file.root.parent().unwrap_or(&file.root)
+    } else {
+        &file.root
+    };
+    let specs = resolve::resolve_for_subject(against, &cwd, Some(subject_dir))?;
     let subject = crate::subject::Subject::File(file);
-    audit(&subject, &specs, scope, format).await
+    audit(&subject, &specs, scope, include_secrets, format).await
 }
 
 async fn audit_text(label: &str, against: &str, format: Format) -> Result<u8> {
@@ -214,7 +235,7 @@ async fn audit_text(label: &str, against: &str, format: Format) -> Result<u8> {
     let content = read_stdin().context("reading stdin")?;
     let text = crate::subject::text::new(label, content)?;
     let subject = crate::subject::Subject::Text(text);
-    audit(&subject, &specs, None, format).await
+    audit(&subject, &specs, None, false, format).await
 }
 
 /// Read all of stdin into a String. Caps at `MAX_TEXT_BYTES + 1` so an
@@ -240,9 +261,10 @@ async fn audit(
     subject: &crate::subject::Subject,
     specs: &[crate::spec::Spec],
     scope: Option<&str>,
+    include_secrets: bool,
     format: Format,
 ) -> Result<u8> {
-    let outcome = crate::run::run(subject, specs, scope).await?;
+    let outcome = crate::run::run(subject, specs, scope, include_secrets).await?;
     crate::output::emit(&outcome.report, &outcome.stats, format)?;
     Ok(crate::output::exit_code(&outcome.report))
 }

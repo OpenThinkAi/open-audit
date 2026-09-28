@@ -114,7 +114,10 @@ async fn run_shell_installer(current_exe: &str, yes: bool) -> Result<()> {
     // input. POSIX `sh` doesn't reliably support pipefail, so we
     // require bash explicitly — the cargo-dist installer being piped
     // in also requires bash, so we're not adding a dependency.
-    let script = format!("set -euo pipefail; curl -LsSf {INSTALLER_URL} | sh");
+    // --proto/--tlsv1.2: refuse any redirect off HTTPS or a TLS downgrade.
+    let script = format!(
+        "set -euo pipefail; curl --proto '=https' --tlsv1.2 -LsSf {INSTALLER_URL} | sh"
+    );
     let status = Command::new("bash")
         .arg("-c")
         .arg(&script)

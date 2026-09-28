@@ -1,6 +1,6 @@
 [package]
 name = "open-audit"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "CLI for auditing codebases against composable spec docs."
 license = "MIT OR Apache-2.0"
@@ -22,8 +22,14 @@ installers = ["shell", "npm"]
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
 # Publish jobs to run in CI
 publish-jobs = ["npm"]
-# Which actions to run on pull requests
-pr-run-mode = "plan"
+# Which actions to run on pull requests. "skip": release.yml has no
+# pull_request trigger (it runs on push to main only).
+pr-run-mode = "skip"
+# Build provenance (SLSA) attestations for every release artifact. Attest in
+# the `host` job, not in build-local-artifacts, so the OIDC token is never
+# exposed to jobs that run crate build scripts.
+github-attestations = true
+github-attestations-phase = "host"
 # Where to host releases
 hosting = "github"
 # The npm package should have this name
@@ -32,9 +38,20 @@ npm-package = "@openthink/audit"
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
-# We patch the trigger (push-to-main + version detection) and publish-npm
-# (OIDC). Tell dist not to flag these as drift. See RELEASING.md.
+# release.yml is hand-patched (push-to-main trigger + npm version gate,
+# least-privilege permissions, lockfile check, OIDC publish-npm). Each patch
+# is marked in the workflow. Tell dist not to flag these as drift. See
+# RELEASING.md.
 allow-dirty = ["ci"]
+
+# Pin every third-party Action dist emits to a full commit SHA. Keep in sync
+# with the `uses:` lines in .github/workflows/release.yml.
+[workspace.metadata.dist.github-action-commits]
+"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803" # v6.1.0
+"actions/upload-artifact" = "b7c566a772e6b6bfb58ed0dc250532a479d7789f" # v6.0.0
+"actions/download-artifact" = "37930b1c2abaa49bbe596cd826c3c89aef350131" # v7.0.0
+"actions/setup-node" = "249970729cb0ef3589644e2896645e5dc5ba9c38" # v6.5.0
+"actions/attest-build-provenance" = "96278af6caaf10aea03fd8d33a09a777ca52d62f" # v3.2.0
 
 [dependencies]
 # CLI
@@ -60,9 +77,9 @@ glob = "0.3"
 # git
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
 # git2 → libz-sys for compression. Force libz-sys to bundle zlib statically
-# so cross-compile via cargo-zigbuild (notably aarch64-unknown-linux-gnu)
-# can find zlib instead of failing with "unable to find dynamic system
-# library 'z'". Slightly larger binary; works everywhere.
+# so builds don't depend on a system zlib ("unable to find dynamic system
+# library 'z'" on minimal runners and cross targets). Slightly larger
+# binary; works everywhere.
 libz-sys = { version = "1", default-features = false, features = ["static"] }
 
 # misc
