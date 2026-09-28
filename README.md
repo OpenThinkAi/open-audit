@@ -68,8 +68,9 @@ secrets, over-broad triggers and missing confirmation steps before you
 publish.
 
 If the subject contains code the model itself refuses to describe, oaudit
-reports that as a critical "safety filter stopped" finding rather than
-failing, since it almost always means something in there is malicious.
+reports a "safety filter stopped" finding rather than failing, since it
+almost always means something in there is malicious. It's critical under an
+`untrusted/*` spec and high under a `trusted/*` one; both close the gate.
 
 ## What happens to your files
 

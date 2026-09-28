@@ -11,7 +11,7 @@
 use crate::claude_session::query_claude;
 use crate::evidence::{self, GatherOptions, GatherStats};
 use crate::finding::{AuditReport, Finding};
-use crate::spec::{Spec, SpecSource};
+use crate::spec::{Mode, Spec, SpecSource};
 use crate::subject::Subject;
 use anyhow::{Context, Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -53,7 +53,16 @@ pub(crate) async fn run(
         let mut findings = if reply.safety_stopped {
             // The retry after a safeguards stop is often partial; keep
             // whatever parses and make the stop itself a finding.
-            let mut kept = parse_findings(&reply.text).unwrap_or_default();
+            let mut kept = if reply.text.is_empty() {
+                Vec::new()
+            } else {
+                parse_findings(&reply.text).unwrap_or_else(|_| {
+                    eprintln!(
+                        "oaudit: {spec_label}: the partial reply after the safety stop wasn't parseable; keeping only the safety-stop finding"
+                    );
+                    Vec::new()
+                })
+            };
             kept.push(safety_stop_finding(spec.meta.mode));
             kept
         } else {
@@ -97,51 +106,51 @@ pub(crate) async fn run(
 /// subject. That's a strong signal, not a tool error: critical for an
 /// untrusted spec, high for a trusted one (security research repos with
 /// real exploit code trip it too), so the gate closes either way.
-fn safety_stop_finding(mode: crate::spec::Mode) -> Finding {
+/// Pushed inside the per-spec loop, so it's attributed to the spec whose
+/// call tripped the filter.
+fn safety_stop_finding(mode: Mode) -> Finding {
     use crate::finding::{Confidence, Location, Severity};
-    let untrusted = mode == crate::spec::Mode::Untrusted;
     blank_finding(
         "oaudit-safety-stop",
-        if untrusted { Severity::Critical } else { Severity::High },
+        if mode == Mode::Untrusted { Severity::Critical } else { Severity::High },
         Confidence::Medium,
-        "The auditor's safety filter stopped its response to this subject".to_string(),
+        "The auditor's safety filter stopped its response to this subject",
         Location { file: "(subject)".to_string(), line: 0, end_line: None },
         "Claude's safeguards cut off the audit reply while it was describing something in \
          these files. That almost always means the subject contains code the model judged \
          to be malicious (credential theft, exfiltration, malware). Findings from the partial \
-         retry above, if any, may be incomplete."
-            .to_string(),
+         retry above, if any, may be incomplete.",
         "Treat the subject as suspicious. Review it by hand before using it, or re-run with \
-         --scope on individual files to see which one trips the filter."
-            .to_string(),
+         --scope on individual files to see which one trips the filter.",
     )
 }
 
-/// A `Finding` with only the always-meaningful fields set; oaudit's own
-/// synthetic findings don't have attack paths, privacy categories, etc.
+/// A `Finding` with only the always-meaningful fields set, for findings
+/// oaudit synthesises itself (no attack paths, privacy categories, etc.).
+/// `spec` is left unset; callers attribute it.
 fn blank_finding(
     id: &str,
     severity: crate::finding::Severity,
     confidence: crate::finding::Confidence,
-    title: String,
+    title: impl Into<String>,
     location: crate::finding::Location,
-    explanation: String,
-    suggestion: String,
+    explanation: impl Into<String>,
+    suggestion: impl Into<String>,
 ) -> Finding {
     Finding {
         id: id.to_string(),
         severity,
         confidence,
-        title,
+        title: title.into(),
         location,
         additional_locations: Vec::new(),
         evidence: String::new(),
-        explanation,
+        explanation: explanation.into(),
         attack_path: None,
         prerequisites: Vec::new(),
         impact: None,
         user_input: None,
-        suggestion,
+        suggestion: suggestion.into(),
         see_also: Vec::new(),
         benign_explanation: None,
         activation: None,
@@ -150,7 +159,7 @@ fn blank_finding(
         destinations: Vec::new(),
         regulatory_relevance: Vec::new(),
         policy_alignment: None,
-        spec: Some("oaudit".to_string()),
+        spec: None,
     }
 }
 
@@ -196,6 +205,8 @@ fn unaudited_files_finding(stats: &GatherStats) -> Option<Finding> {
         listing.join("\n"),
         if more > 0 { format!("\n… and {more} more") } else { String::new() }
     );
+    // Covers the whole run, not one spec.
+    f.spec = Some("oaudit".to_string());
     Some(f)
 }
 

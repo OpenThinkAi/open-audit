@@ -24,8 +24,8 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{ChildStderr, ChildStdin, Command};
 
 #[derive(Serialize)]
 struct UserMessage<'a> {
@@ -40,14 +40,29 @@ struct UserBody<'a> {
     content: &'a str,
 }
 
-/// One round of `claude` stream-json output. Anything that isn't a
-/// `result` is collapsed into `Other` — the deserializer must not fail
-/// when claude introduces new event types.
+/// One round of `claude` stream-json output. `system` and `user` are
+/// typed only as far as safeguards-stop detection needs; anything else is
+/// collapsed into `Other` — the deserializer must not fail when claude
+/// introduces new event types.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
 enum StreamEvent {
     #[serde(rename = "result")]
     Result(ResultEvent),
+    #[serde(rename = "system")]
+    System {
+        #[serde(default)]
+        subtype: String,
+        #[serde(default)]
+        content: String,
+    },
+    #[serde(rename = "user")]
+    User {
+        #[serde(default, rename = "isSynthetic")]
+        is_synthetic: bool,
+        #[serde(default)]
+        message: serde_json::Value,
+    },
     #[serde(other)]
     Other,
 }
@@ -198,54 +213,51 @@ pub(crate) struct Reply {
     pub safety_stopped: bool,
 }
 
-async fn read_until_result(stdout: ChildStdout) -> Result<Reply> {
+async fn read_until_result<R: AsyncRead + Unpin>(stdout: R) -> Result<Reply> {
     let mut lines = BufReader::new(stdout).lines();
     let mut safety_stopped = false;
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
         }
-        if is_safety_stop_event(&line) {
-            safety_stopped = true;
-            continue;
-        }
         let event: StreamEvent = match serde_json::from_str(&line) {
             Ok(e) => e,
             Err(_) => continue, // unknown shape — skip and keep reading
         };
-        if let StreamEvent::Result(r) = event {
-            if r.is_error || r.subtype != "success" {
-                bail!("{}", explain_failure_subtype(&r.subtype, r.is_error));
+        match event {
+            // The CLI's two markers for a safeguards stop: an informational
+            // notice, and the synthetic user turn it injects before retrying.
+            StreamEvent::System { subtype, content }
+                if subtype == "informational" && mentions_safety_stop(&content) =>
+            {
+                safety_stopped = true;
             }
-            let text = r.result.unwrap_or_default();
-            if text.is_empty() && !safety_stopped {
-                bail!(
-                    "claude returned success but no text. The spec may have produced an empty response — re-run with a narrower scope or a different spec to debug."
-                );
+            StreamEvent::User { is_synthetic: true, message }
+                if mentions_safety_stop(&message.to_string()) =>
+            {
+                safety_stopped = true;
             }
-            return Ok(Reply { text, safety_stopped });
+            StreamEvent::Result(r) => {
+                if r.is_error || r.subtype != "success" {
+                    bail!("{}", explain_failure_subtype(&r.subtype, r.is_error));
+                }
+                let text = r.result.unwrap_or_default();
+                if text.is_empty() && !safety_stopped {
+                    bail!(
+                        "claude returned success but no text. The spec may have produced an empty response — re-run with a narrower scope or a different spec to debug."
+                    );
+                }
+                return Ok(Reply { text, safety_stopped });
+            }
+            _ => {}
         }
     }
     bail!("claude stdout closed before emitting a result event")
 }
 
-/// Recognise the CLI's two markers for a safeguards stop: an informational
-/// system notice, and the synthetic user turn it injects before retrying.
-/// Matched loosely on purpose; the wording isn't a stable contract, and a
+/// Matched loosely on purpose: the wording isn't a stable contract, and a
 /// miss only degrades to the old "no text" error.
-fn is_safety_stop_event(line: &str) -> bool {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-        return false;
-    };
-    let text = match v.get("type").and_then(|t| t.as_str()) {
-        Some("system") if v.get("subtype").and_then(|s| s.as_str()) == Some("informational") => {
-            v.get("content").and_then(|c| c.as_str()).unwrap_or_default().to_string()
-        }
-        Some("user") if v.get("isSynthetic").and_then(|s| s.as_bool()) == Some(true) => {
-            v.pointer("/message/content").map(|c| c.to_string()).unwrap_or_default()
-        }
-        _ => return false,
-    };
+fn mentions_safety_stop(text: &str) -> bool {
     let text = text.to_lowercase();
     text.contains("safeguards stopped") || text.contains("safety classifier")
 }
@@ -305,21 +317,44 @@ pub(crate) async fn preflight() -> Result<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn recognises_safety_stop_markers() {
-        // Shapes captured from claude 2.1.283 when a reply was cut off.
-        let notice = r#"{"type":"system","subtype":"informational","content":"Fable 5.1's safeguards stopped the response above · continuing once with that noted","level":"notice"}"#;
-        let retry = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Your response above was stopped by a safety classifier — this is not a tool or API error."}]},"isSynthetic":true}"#;
-        assert!(is_safety_stop_event(notice));
-        assert!(is_safety_stop_event(retry));
+    // Shapes captured from claude 2.1.283 when a reply was cut off.
+    const STOP_NOTICE: &str = r#"{"type":"system","subtype":"informational","content":"Fable 5.1's safeguards stopped the response above · continuing once with that noted","level":"notice"}"#;
+    const STOP_RETRY: &str = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Your response above was stopped by a safety classifier — this is not a tool or API error."}]},"isSynthetic":true}"#;
+    const EMPTY_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":false,"result":""}"#;
 
+    async fn read_lines(lines: &[&str]) -> Result<Reply> {
+        let stream = lines.join("\n") + "\n";
+        read_until_result(stream.as_bytes()).await
+    }
+
+    #[tokio::test]
+    async fn empty_reply_after_safety_stop_is_not_an_error() {
+        for marker in [STOP_NOTICE, STOP_RETRY] {
+            let reply = read_lines(&[marker, EMPTY_RESULT]).await.unwrap();
+            assert!(reply.safety_stopped);
+            assert!(reply.text.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_reply_without_safety_stop_still_errors() {
         // A real (non-synthetic) user turn quoting the phrase doesn't count,
-        // nor does an unrelated notice.
+        // nor does an unrelated notice or a non-string content field.
         let echoed = r#"{"type":"user","message":{"role":"user","content":"safety classifier"}}"#;
         let other = r#"{"type":"system","subtype":"informational","content":"rate limit soon"}"#;
-        assert!(!is_safety_stop_event(echoed));
-        assert!(!is_safety_stop_event(other));
-        assert!(!is_safety_stop_event("not json"));
+        let odd = r#"{"type":"system","subtype":"informational","content":{"x":1}}"#;
+        let err = read_lines(&[echoed, other, odd, "not json", EMPTY_RESULT])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no text"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn clean_reply_is_not_marked_stopped() {
+        let ok = r#"{"type":"result","subtype":"success","is_error":false,"result":"[]"}"#;
+        let reply = read_lines(&[r#"{"type":"system","subtype":"init"}"#, ok]).await.unwrap();
+        assert!(!reply.safety_stopped);
+        assert_eq!(reply.text, "[]");
     }
 
     #[test]
@@ -365,8 +400,13 @@ mod tests {
 
     #[test]
     fn other_event_types_match_other_variant() {
+        // `system` and `user` are typed now (safeguards-stop detection) but
+        // must still parse with extra or missing fields.
+        let init: StreamEvent =
+            serde_json::from_str(r#"{"type":"system","subtype":"init","cwd":"/tmp"}"#).unwrap();
+        assert!(matches!(init, StreamEvent::System { .. }));
+
         for line in [
-            r#"{"type":"system","subtype":"init","cwd":"/tmp"}"#,
             r#"{"type":"assistant","message":{"role":"assistant","content":[]}}"#,
             r#"{"type":"rate_limit_event","rate_limit_info":{}}"#,
             r#"{"type":"some_brand_new_event"}"#,
