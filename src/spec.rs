@@ -164,10 +164,10 @@ mod tests {
 
     #[test]
     fn missing_required_field_errors() {
-        // missing `kind`
-        let text = "---\nname: test\nmode: trusted\n---\nbody\n";
+        // missing `mode` (`kind` is optional)
+        let text = "---\nname: test\nkind: prompt\n---\nbody\n";
         let err = parse(text, SpecSource::Builtin("test")).unwrap_err();
-        assert!(format!("{err:#}").to_lowercase().contains("kind"));
+        assert!(format!("{err:#}").to_lowercase().contains("mode"));
     }
 
     #[test]
