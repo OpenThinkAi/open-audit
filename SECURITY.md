@@ -24,6 +24,9 @@ Include in the report:
 - A reproduction or proof of concept, if you have one.
 - Your assessment of impact.
 
+A maintainer will confirm receipt as soon as they can. If you haven't heard
+back within two weeks, follow up on the same report.
+
 ## Threat model
 
 - **Data leaves your machine.** oaudit sends the contents of the audited

@@ -29,9 +29,10 @@ impl Mode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
+    #[default]
     Prompt,
     Deterministic,
     Hybrid,
@@ -49,6 +50,8 @@ pub struct DefaultScope {
 pub struct SpecMeta {
     pub name: String,
     pub mode: Mode,
+    /// Informational today; optional so custom specs can omit it.
+    #[serde(default)]
     pub kind: Kind,
     #[serde(default)]
     pub default_scope: Option<DefaultScope>,
@@ -109,6 +112,13 @@ mod tests {
         assert!(spec.meta.default_scope.is_none());
         assert!(spec.meta.deterministic_checks.is_empty());
         assert_eq!(spec.body.trim(), "body text");
+    }
+
+    #[test]
+    fn kind_is_optional_and_defaults_to_prompt() {
+        let spec = parse("---\nname: t\nmode: untrusted\n---\nbody\n", SpecSource::Builtin("t"))
+            .unwrap();
+        assert_eq!(spec.meta.kind, Kind::Prompt);
     }
 
     #[test]

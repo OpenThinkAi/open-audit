@@ -30,6 +30,9 @@ Update later with `oaudit update`.
 
 ## Quick start
 
+Output is **JSON by default** (for scripts and CI). The examples below add
+`--format human` to make it readable.
+
 ```sh
 # Is this third-party repo safe to use? (readable output)
 oaudit repo ./some-repo --format human
@@ -43,9 +46,6 @@ oaudit repo . --against trusted/security,trusted/privacy --format human
 # Screen a piece of untrusted text (issue body, RAG snippet, email)
 cat issue.md | oaudit text --label issue-42 --format human
 ```
-
-Output is **JSON by default** (for scripts and CI); add `--format human` to
-read it yourself.
 
 ## Commands
 
@@ -126,7 +126,6 @@ auditor's instructions.
 ---
 name: api-keys
 mode: trusted          # or untrusted
-kind: prompt           # prompt | hybrid | deterministic (informational today)
 default_scope:         # optional; defaults to every file
   include: ["**/*"]
   exclude: ["node_modules/**", ".git/**"]
