@@ -52,7 +52,7 @@ findings.
 - **Portability assumptions** that would break or misbehave on other
   machines: hardcoded paths, specific usernames, local services
 
-## DO NOT report
+## Do not report
 
 - Capabilities the purpose needs, used carefully
 - Style, prose quality, or missing tests
