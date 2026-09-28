@@ -45,13 +45,21 @@ pub(crate) async fn run(
             "{spec_label}: auditing ({file_count} files) — claude is working"
         ));
         let prompt = build_user_prompt(&gather.chunks);
-        let response = query_claude(&spec.body, &prompt)
+        let reply = query_claude(&spec.body, &prompt)
             .await
             .with_context(|| format!("querying claude for {spec_label}"))?;
 
         spinner.set_message(format!("{spec_label}: parsing findings"));
-        let mut findings = parse_findings(&response)
-            .with_context(|| format!("parsing findings from {spec_label}"))?;
+        let mut findings = if reply.safety_stopped {
+            // The retry after a safeguards stop is often partial; keep
+            // whatever parses and make the stop itself a finding.
+            let mut kept = parse_findings(&reply.text).unwrap_or_default();
+            kept.push(safety_stop_finding(spec.meta.mode));
+            kept
+        } else {
+            parse_findings(&reply.text)
+                .with_context(|| format!("parsing findings from {spec_label}"))?
+        };
         for f in &mut findings {
             f.spec = Some(spec_label.clone());
         }
@@ -84,6 +92,68 @@ pub(crate) async fn run(
     })
 }
 
+/// The model's own safety classifier stopped its audit reply, which in
+/// practice means it was describing genuinely malicious code in the
+/// subject. That's a strong signal, not a tool error: critical for an
+/// untrusted spec, high for a trusted one (security research repos with
+/// real exploit code trip it too), so the gate closes either way.
+fn safety_stop_finding(mode: crate::spec::Mode) -> Finding {
+    use crate::finding::{Confidence, Location, Severity};
+    let untrusted = mode == crate::spec::Mode::Untrusted;
+    blank_finding(
+        "oaudit-safety-stop",
+        if untrusted { Severity::Critical } else { Severity::High },
+        Confidence::Medium,
+        "The auditor's safety filter stopped its response to this subject".to_string(),
+        Location { file: "(subject)".to_string(), line: 0, end_line: None },
+        "Claude's safeguards cut off the audit reply while it was describing something in \
+         these files. That almost always means the subject contains code the model judged \
+         to be malicious (credential theft, exfiltration, malware). Findings from the partial \
+         retry above, if any, may be incomplete."
+            .to_string(),
+        "Treat the subject as suspicious. Review it by hand before using it, or re-run with \
+         --scope on individual files to see which one trips the filter."
+            .to_string(),
+    )
+}
+
+/// A `Finding` with only the always-meaningful fields set; oaudit's own
+/// synthetic findings don't have attack paths, privacy categories, etc.
+fn blank_finding(
+    id: &str,
+    severity: crate::finding::Severity,
+    confidence: crate::finding::Confidence,
+    title: String,
+    location: crate::finding::Location,
+    explanation: String,
+    suggestion: String,
+) -> Finding {
+    Finding {
+        id: id.to_string(),
+        severity,
+        confidence,
+        title,
+        location,
+        additional_locations: Vec::new(),
+        evidence: String::new(),
+        explanation,
+        attack_path: None,
+        prerequisites: Vec::new(),
+        impact: None,
+        user_input: None,
+        suggestion,
+        see_also: Vec::new(),
+        benign_explanation: None,
+        activation: None,
+        impact_if_malicious: None,
+        data_categories: Vec::new(),
+        destinations: Vec::new(),
+        regulatory_relevance: Vec::new(),
+        policy_alignment: None,
+        spec: Some("oaudit".to_string()),
+    }
+}
+
 /// In untrusted mode, anything the model never saw is itself a finding: a
 /// hostile subject can pad a payload past the size cap or give it a
 /// secret-looking name. Medium when any non-binary file was skipped (not
@@ -107,39 +177,26 @@ fn unaudited_files_finding(stats: &GatherStats) -> Option<Finding> {
         + stats.skipped_secret)
         .max(skipped.len() as u32) as usize;
     let more = total.saturating_sub(listing.len());
-    Some(Finding {
-        id: "oaudit-unaudited-files".to_string(),
-        severity: if only_binary { Severity::Low } else { Severity::Medium },
-        confidence: Confidence::High,
-        title: format!("{total} file(s) were not shown to the auditor"),
-        location: Location { file: first.path.clone(), line: 0, end_line: None },
-        additional_locations: Vec::new(),
-        evidence: format!(
-            "{}{}",
-            listing.join("\n"),
-            if more > 0 { format!("\n… and {more} more") } else { String::new() }
-        ),
-        explanation: "These files were skipped (too large, binary, unreadable, or withheld as \
-                      possible secrets), so nothing in this report covers them. In untrusted \
-                      code that is a blind spot an author could use deliberately."
+    let mut f = blank_finding(
+        "oaudit-unaudited-files",
+        if only_binary { Severity::Low } else { Severity::Medium },
+        Confidence::High,
+        format!("{total} file(s) were not shown to the auditor"),
+        Location { file: first.path.clone(), line: 0, end_line: None },
+        "These files were skipped (too large, binary, unreadable, or withheld as \
+         possible secrets), so nothing in this report covers them. In untrusted \
+         code that is a blind spot an author could use deliberately."
             .to_string(),
-        attack_path: None,
-        prerequisites: Vec::new(),
-        impact: None,
-        user_input: None,
-        suggestion: "Inspect these files by hand, or re-run with --scope on them \
-                     (and --include-secrets if they're not really secrets)."
+        "Inspect these files by hand, or re-run with --scope on them \
+         (and --include-secrets if they're not really secrets)."
             .to_string(),
-        see_also: Vec::new(),
-        benign_explanation: None,
-        activation: None,
-        impact_if_malicious: None,
-        data_categories: Vec::new(),
-        destinations: Vec::new(),
-        regulatory_relevance: Vec::new(),
-        policy_alignment: None,
-        spec: Some("oaudit".to_string()),
-    })
+    );
+    f.evidence = format!(
+        "{}{}",
+        listing.join("\n"),
+        if more > 0 { format!("\n… and {more} more") } else { String::new() }
+    );
+    Some(f)
 }
 
 #[derive(Debug)]
@@ -210,6 +267,10 @@ fn build_user_prompt(chunks: &[crate::evidence::EvidenceChunk]) -> String {
          This version of oaudit does not run deterministic checks: no \
          deterministic-check findings are provided. Where your instructions \
          rely on them, perform those checks yourself from the file contents.\n\n\
+         When code is malicious, describe what it does and cite file and line; do not \
+         reproduce payloads, exploit code, encoded blobs or exfiltration URLs verbatim. \
+         Keep each `evidence` to a short excerpt (at most two lines, with secrets and \
+         URLs elided).\n\n\
          Audit the files above per your system prompt. Return findings as a JSON array exactly matching the output contract in your system prompt. Return ONLY the JSON array — no prose before or after, no code fences.\n"
     ));
     out

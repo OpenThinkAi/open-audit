@@ -87,7 +87,7 @@ const ISOLATION_ARGS: &[&str] = &[
     "--no-session-persistence",
 ];
 
-pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Result<String> {
+pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Result<Reply> {
     // Empty cwd: nothing for claude to auto-discover. Removed on drop, after
     // the child has exited (or been killed).
     let workdir = tempfile::tempdir().context("creating isolated working dir for claude")?;
@@ -140,7 +140,7 @@ pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Res
     let stderr_text = stderr_task.await.unwrap_or_default();
 
     match result {
-        Ok(text) => Ok(text),
+        Ok(reply) => Ok(reply),
         Err(e) => {
             // claude can emit a non-success result event AND exit 0 (the
             // event itself is the error signal). In that case status is
@@ -185,10 +185,28 @@ async fn write_request(mut stdin: ChildStdin, user_message: &str) -> Result<()> 
     Ok(())
 }
 
-async fn read_until_result(stdout: ChildStdout) -> Result<String> {
+/// What one audit call produced.
+#[derive(Debug)]
+pub(crate) struct Reply {
+    /// Final text. May be empty when `safety_stopped` is set.
+    pub text: String,
+    /// The model's own safety classifier cut a response off mid-way. The
+    /// CLI then retries once with "don't produce that again", and the retry
+    /// is often empty or partial. This fires almost exclusively when the
+    /// subject contains real malicious code the model was describing, so
+    /// callers treat it as a signal rather than a tool failure.
+    pub safety_stopped: bool,
+}
+
+async fn read_until_result(stdout: ChildStdout) -> Result<Reply> {
     let mut lines = BufReader::new(stdout).lines();
+    let mut safety_stopped = false;
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
+            continue;
+        }
+        if is_safety_stop_event(&line) {
+            safety_stopped = true;
             continue;
         }
         let event: StreamEvent = match serde_json::from_str(&line) {
@@ -199,15 +217,37 @@ async fn read_until_result(stdout: ChildStdout) -> Result<String> {
             if r.is_error || r.subtype != "success" {
                 bail!("{}", explain_failure_subtype(&r.subtype, r.is_error));
             }
-            return match r.result {
-                Some(text) if !text.is_empty() => Ok(text),
-                _ => bail!(
+            let text = r.result.unwrap_or_default();
+            if text.is_empty() && !safety_stopped {
+                bail!(
                     "claude returned success but no text. The spec may have produced an empty response — re-run with a narrower scope or a different spec to debug."
-                ),
-            };
+                );
+            }
+            return Ok(Reply { text, safety_stopped });
         }
     }
     bail!("claude stdout closed before emitting a result event")
+}
+
+/// Recognise the CLI's two markers for a safeguards stop: an informational
+/// system notice, and the synthetic user turn it injects before retrying.
+/// Matched loosely on purpose; the wording isn't a stable contract, and a
+/// miss only degrades to the old "no text" error.
+fn is_safety_stop_event(line: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+    let text = match v.get("type").and_then(|t| t.as_str()) {
+        Some("system") if v.get("subtype").and_then(|s| s.as_str()) == Some("informational") => {
+            v.get("content").and_then(|c| c.as_str()).unwrap_or_default().to_string()
+        }
+        Some("user") if v.get("isSynthetic").and_then(|s| s.as_bool()) == Some(true) => {
+            v.pointer("/message/content").map(|c| c.to_string()).unwrap_or_default()
+        }
+        _ => return false,
+    };
+    let text = text.to_lowercase();
+    text.contains("safeguards stopped") || text.contains("safety classifier")
 }
 
 /// Translate claude's stream-json failure subtypes into actionable
@@ -264,6 +304,23 @@ pub(crate) async fn preflight() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_safety_stop_markers() {
+        // Shapes captured from claude 2.1.283 when a reply was cut off.
+        let notice = r#"{"type":"system","subtype":"informational","content":"Fable 5.1's safeguards stopped the response above · continuing once with that noted","level":"notice"}"#;
+        let retry = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Your response above was stopped by a safety classifier — this is not a tool or API error."}]},"isSynthetic":true}"#;
+        assert!(is_safety_stop_event(notice));
+        assert!(is_safety_stop_event(retry));
+
+        // A real (non-synthetic) user turn quoting the phrase doesn't count,
+        // nor does an unrelated notice.
+        let echoed = r#"{"type":"user","message":{"role":"user","content":"safety classifier"}}"#;
+        let other = r#"{"type":"system","subtype":"informational","content":"rate limit soon"}"#;
+        assert!(!is_safety_stop_event(echoed));
+        assert!(!is_safety_stop_event(other));
+        assert!(!is_safety_stop_event("not json"));
+    }
 
     #[test]
     fn isolation_args_disable_tools_settings_and_mcp() {
@@ -361,7 +418,8 @@ mod tests {
             "ping",
         )
         .await
-        .unwrap();
+        .unwrap()
+        .text;
         assert!(
             result.to_lowercase().contains("pong"),
             "expected 'pong' in: {result}"
