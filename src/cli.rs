@@ -50,8 +50,8 @@ pub enum Command {
     /// from stdin (sugar for `oaudit text`).
     File {
         /// Path to a single file or a non-git directory, or `-` to read
-        /// from stdin. (For git repositories use `oaudit repo` to enable
-        /// git-history evidence.)
+        /// from stdin. For a git repository use `oaudit repo`, which
+        /// respects the repo's .gitignore in trusted mode.
         target: PathBuf,
 
         /// Comma-separated specs to audit against

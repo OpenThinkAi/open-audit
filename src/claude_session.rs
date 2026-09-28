@@ -172,10 +172,11 @@ pub(crate) async fn query_claude(system_prompt: &str, user_message: &str) -> Res
                      Update it with `claude update` and retry.\n  stderr: {stderr_trimmed}"
                 );
             }
+            if !status.success() && !stderr_trimmed.is_empty() {
+                bail!("{e:#}\n  (claude exited with {status}; stderr: {stderr_trimmed})");
+            }
             if !status.success() {
-                bail!(
-                    "claude exited with {status}.\n  stderr: {stderr_trimmed}\n  parse: {e:#}",
-                );
+                bail!("{e:#}\n  (claude exited with {status})");
             }
             if !stderr_trimmed.is_empty() {
                 bail!("{e:#}\n  stderr: {stderr_trimmed}");
@@ -239,7 +240,26 @@ async fn read_until_result<R: AsyncRead + Unpin>(stdout: R) -> Result<Reply> {
             }
             StreamEvent::Result(r) => {
                 if r.is_error || r.subtype != "success" {
-                    bail!("{}", explain_failure_subtype(&r.subtype, r.is_error));
+                    // On an error result, `result` carries claude's own error
+                    // message (an API error, not model output), which is
+                    // the only useful detail we get.
+                    let detail = r.result.as_deref().unwrap_or_default();
+                    if looks_like_context_overflow(detail) {
+                        bail!(
+                            "the subject is too large for a single audit request ({}). \
+                             Narrow it with --scope (e.g. --scope 'src/**') or audit \
+                             subdirectories separately.",
+                            detail.chars().take(200).collect::<String>().trim()
+                        );
+                    }
+                    let mut msg = explain_failure_subtype(&r.subtype, r.is_error);
+                    if !detail.is_empty() {
+                        msg.push_str(&format!(
+                            "\n  claude said: {}",
+                            detail.chars().take(300).collect::<String>().trim()
+                        ));
+                    }
+                    bail!("{msg}");
                 }
                 let text = r.result.unwrap_or_default();
                 if text.is_empty() && !safety_stopped {
@@ -253,6 +273,14 @@ async fn read_until_result<R: AsyncRead + Unpin>(stdout: R) -> Result<Reply> {
         }
     }
     bail!("claude stdout closed before emitting a result event")
+}
+
+fn looks_like_context_overflow(detail: &str) -> bool {
+    let d = detail.to_lowercase();
+    d.contains("prompt is too long")
+        || d.contains("too many tokens")
+        || d.contains("context window")
+        || d.contains("context length")
 }
 
 /// Matched loosely on purpose: the wording isn't a stable contract, and a

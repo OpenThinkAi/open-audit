@@ -282,7 +282,13 @@ fn build_user_prompt(chunks: &[crate::evidence::EvidenceChunk]) -> String {
          reproduce payloads, exploit code, encoded blobs or exfiltration URLs verbatim. \
          Keep each `evidence` to a short excerpt (at most two lines, with secrets and \
          URLs elided).\n\n\
-         Audit the files above per your system prompt. Return findings as a JSON array exactly matching the output contract in your system prompt. Return ONLY the JSON array — no prose before or after, no code fences.\n"
+         Audit the files above per your system prompt. Return findings as a JSON array. \
+         If your system prompt defines an output contract, follow it exactly. Every finding \
+         must at least have: \"id\" (string slug), \"severity\" (critical|high|medium|low|info), \
+         \"confidence\" (high|medium|low), \"title\", \"location\" ({{\"file\": path, \"line\": \
+         number, \"endLine\": number}}; line 0 if not line-specific), \"evidence\", \
+         \"explanation\", \"suggestion\" (all strings). Return [] if there is nothing to report. \
+         Return ONLY the JSON array — no prose before or after, no code fences.\n"
     ));
     out
 }
