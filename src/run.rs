@@ -342,7 +342,7 @@ fn build_user_prompt(chunks: &[crate::evidence::EvidenceChunk], stats: &GatherSt
             }
         }
         if unlisted > 0 {
-            out.push_str(&format!("… and {unlisted} more binary files, not listed\n"));
+            out.push_str(&format!("… and {unlisted} more binary file(s), not listed\n"));
         }
         out.push_str(&format!("</{btag}>\n\n"));
         format!("<{tag}> and <{btag}> tags")
@@ -612,7 +612,7 @@ mod tests {
             "path=\"bin/tool&quot;&gt;\" bytes=7 sha256=not-hashed kind=executable format=\"ELF\""
         ));
         // skipped_binary (3) > listed (2): the gap is stated.
-        assert!(prompt.contains("… and 1 more binary files, not listed"));
+        assert!(prompt.contains("… and 1 more binary file(s), not listed"));
         assert!(prompt.contains("Coverage of this audit is partial"));
         assert!(prompt.contains(&format!("and <{tag}> tags comes from oaudit")));
         // Binaries come before the closing instructions.

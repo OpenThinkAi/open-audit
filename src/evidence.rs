@@ -883,7 +883,7 @@ fn binary_reason(head: &[u8], bytes: u64, sha256: Option<String>) -> SkipReason 
 
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::Digest;
-    to_hex(&sha2::Sha256::digest(bytes))
+    format!("{:x}", sha2::Sha256::digest(bytes))
 }
 
 /// Stream the whole file into sha256, giving up (`None`) past
@@ -893,15 +893,7 @@ fn hash_file(path: &Path) -> std::io::Result<Option<String>> {
     let file = std::fs::File::open(path)?;
     let mut hasher = sha2::Sha256::new();
     let copied = std::io::copy(&mut file.take(MAX_HASH_BYTES + 1), &mut hasher)?;
-    Ok((copied <= MAX_HASH_BYTES).then(|| to_hex(&hasher.finalize())))
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    Ok((copied <= MAX_HASH_BYTES).then(|| format!("{:x}", hasher.finalize())))
 }
 
 /// Build a single-file `GatherResult` directly. Skip the WalkBuilder /
@@ -932,7 +924,7 @@ fn single_file_chunk(path: &Path, opts: &GatherOptions, limits: Limits) -> Resul
             limits.max_file_bytes
         ),
         ReadOutcome::Binary(reason) => bail!(
-            "{} looks binary ({reason}) — binary files can't be audited as a single-file subject",
+            "{} can't be audited as a single-file subject: it's {reason}",
             path.display()
         ),
     };

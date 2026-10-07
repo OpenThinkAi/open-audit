@@ -223,7 +223,6 @@ fn show_io_samples(stats: &GatherStats) -> bool {
         .any(|s| matches!(s.reason, crate::evidence::SkipReason::Unreadable { .. }))
 }
 
-
 /// Determine the process exit code from the report. v1 rule: any
 /// `high` or `critical` finding closes the gate (exit 1). Otherwise
 /// exit 0. Tool errors get exit 2 from main.

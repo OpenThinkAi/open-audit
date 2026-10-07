@@ -325,7 +325,6 @@ fn list_specs() -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
