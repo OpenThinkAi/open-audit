@@ -64,8 +64,10 @@ Options for `repo` and `file`:
   and/or paths to your own spec files (`./my-spec.md`). Each spec is a
   separate Claude request.
 - `--scope '<glob>'`: audit only matching files, for example
-  `--scope 'src/**'`. Replaces the spec's include list; its exclude list
-  still applies.
+  `--scope 'src/**'`. Repeat it or separate globs with commas to audit
+  several (`--scope 'src/**' --scope package.json --scope bun.lock`); a
+  file matching any of them is in. Replaces the spec's include list; its
+  exclude list still applies.
 - `--include-secrets`: also send files that look like secrets (withheld by
   default; see below).
 - `--format json|human`: default `json`.
@@ -167,12 +169,23 @@ overrides are ignored in favour of the built-ins.
   "specs_run": ["untrusted/security"],
   "subject": "/abs/path/to/subject",
   "gather": {
+    "coverage": "partial",
     "skipped_too_large": 0,
-    "skipped_binary": 0,
+    "skipped_binary": 1,
     "skipped_io_error": 0,
     "skipped_secret": 1,
     "decoded_lossily": 0,
-    "skipped_files": [{ "path": ".env", "reason": "possible_secret" }],
+    "skipped_files": [
+      { "path": ".env", "reason": "possible_secret" },
+      {
+        "path": "tools/helper",
+        "reason": "binary",
+        "bytes": 81920,
+        "sha256": "9f86d0…",
+        "kind": "executable",
+        "format": "ELF"
+      }
+    ],
     "io_error_samples": [],
     "io_error_samples_truncated": false
   }
@@ -183,7 +196,15 @@ Findings can carry extra fields depending on the spec (`benign_explanation`,
 `activation` and `impact_if_malicious` in untrusted specs; `data_categories`
 and `destinations` in privacy specs). Findings whose `spec` is `oaudit` were
 added by oaudit itself: `oaudit-unaudited-files` (files the model wasn't
-shown) and `oaudit-safety-stop` (see below).
+shown), `oaudit-executable-binaries` (executables and archives among them)
+and `oaudit-safety-stop` (see below).
+
+`gather.coverage` is `partial` whenever a file in scope wasn't shown to the
+model; `skipped_files` says which and why. Binary files are always listed
+there with `bytes`, `sha256` (`null` over 256 MiB) and `kind`:
+`executable` (ELF, Mach-O, PE, WebAssembly, a `#!` script with binary
+content, …), `archive` (zip/jar, gzip, tar, 7z, …) or `data`, with
+`format` naming the signature.
 
 ## What happens to your files
 
@@ -213,12 +234,20 @@ shown) and `oaudit-safety-stop` (see below).
 
 ## Limits
 
-- Per file: 256 KB. Larger files, binaries and unreadable files are skipped
-  and listed in the output.
-- Per run: 5,000 files and 8 MB. The model's context window usually runs
-  out first: a subject that doesn't fit fails with exit 2 and a "too large
-  for a single audit request" message. Narrow it with `--scope` or audit
-  subdirectories separately. Large subjects aren't chunked.
+- Per file: 256 KB. Larger files and unreadable files are skipped and
+  listed in the output.
+- Binary files are never sent to the model and don't count toward any
+  limit. They are listed instead (path, size, sha256, kind), both in the
+  output and in the prompt, so the model knows they exist, and the report
+  marks coverage as partial. A file counts as binary when it contains a NUL
+  byte and doesn't read as text; a NUL inside otherwise-readable code (or
+  UTF-16 text) doesn't hide it from the audit.
+- Per run: 5,000 text files and 8 MB of text. Over 8 MB fails with exit 2,
+  naming the largest files and top-level directories and, when it can,
+  the `--scope` that would fit. The model's context window usually runs
+  out before that: a subject that doesn't fit fails with exit 2 and a "too
+  large for a single audit request" message. Narrow it with `--scope` or
+  audit subdirectories separately. Large subjects aren't chunked.
 - `oaudit repo` needs the repository root; for a subdirectory, pass the
   root or use `oaudit file <subdir>`.
 

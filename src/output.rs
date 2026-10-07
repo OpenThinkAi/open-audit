@@ -22,6 +22,10 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     }
     #[derive(serde::Serialize)]
     struct GatherStatsJson<'a> {
+        /// `partial` when any file in scope wasn't shown to the model
+        /// (binary, too large, unreadable or withheld); see
+        /// `skipped_files`.
+        coverage: &'static str,
         skipped_too_large: u32,
         skipped_binary: u32,
         skipped_io_error: u32,
@@ -37,6 +41,7 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     let out = Output {
         report,
         gather: GatherStatsJson {
+            coverage: if stats.coverage_partial() { "partial" } else { "complete" },
             skipped_too_large: stats.skipped_too_large,
             skipped_binary: stats.skipped_binary,
             skipped_io_error: stats.skipped_io_error,
@@ -50,6 +55,9 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
+
+/// Skipped paths printed in human output; JSON carries the full list.
+const HUMAN_SKIP_LIST_MAX: usize = 50;
 
 fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     let dim = Style::new().dim();
@@ -69,7 +77,7 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     );
 
     // Skip stats — surface BEFORE the verdict so users know what wasn't read.
-    if has_skips(stats) {
+    if stats.coverage_partial() {
         let mut parts = Vec::new();
         if stats.skipped_too_large > 0 {
             parts.push(format!("{} too large", stats.skipped_too_large));
@@ -83,17 +91,25 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         if stats.skipped_secret > 0 {
             parts.push(format!("{} withheld as possible secrets", stats.skipped_secret));
         }
+        println!(
+            "{}",
+            style("coverage: partial — some files in scope were not shown to the model").yellow()
+        );
         println!("{}", dim.apply_to(format!("skipped: {}", parts.join(", "))));
         if show_io_samples(stats) {
             for sample in &stats.io_error_samples {
                 println!("{}", dim.apply_to(format!("  - {}", clean(sample))));
             }
         }
-        for skip in &stats.skipped_files {
+        for skip in stats.skipped_files.iter().take(HUMAN_SKIP_LIST_MAX) {
             println!(
                 "{}",
                 dim.apply_to(format!("  - {} ({})", clean(&skip.path), clean(&skip.reason.to_string())))
             );
+        }
+        let more = stats.skipped_files.len().saturating_sub(HUMAN_SKIP_LIST_MAX);
+        if more > 0 {
+            println!("{}", dim.apply_to(format!("  … and {more} more (--format json lists them)")));
         }
     }
     println!();
@@ -207,12 +223,6 @@ fn show_io_samples(stats: &GatherStats) -> bool {
         .any(|s| matches!(s.reason, crate::evidence::SkipReason::Unreadable { .. }))
 }
 
-fn has_skips(stats: &GatherStats) -> bool {
-    stats.skipped_too_large > 0
-        || stats.skipped_binary > 0
-        || stats.skipped_io_error > 0
-        || stats.skipped_secret > 0
-}
 
 /// Determine the process exit code from the report. v1 rule: any
 /// `high` or `critical` finding closes the gate (exit 1). Otherwise

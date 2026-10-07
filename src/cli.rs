@@ -28,12 +28,13 @@ pub enum Command {
         #[arg(long, default_value = "untrusted/security")]
         against: String,
 
-        /// Single glob to limit which files are audited. Replaces the
-        /// spec's include list, but the spec's exclude list is preserved
-        /// (so safety excludes like `target/**` still apply). Multi-glob
-        /// limiting is not supported — use a custom spec file for that.
-        #[arg(long)]
-        scope: Option<String>,
+        /// Glob limiting which files are audited. Repeat the flag or
+        /// separate globs with commas (`--scope 'src/**' --scope
+        /// package.json`); a file matching any of them is in scope.
+        /// Replaces the spec's include list, but the spec's exclude list
+        /// is preserved (so safety excludes like `target/**` still apply).
+        #[arg(long, value_delimiter = ',')]
+        scope: Vec<String>,
 
         /// Send files that look like secrets (`.env*`, private keys,
         /// `.npmrc`, cloud credentials, …) to the model too. They're
@@ -62,12 +63,13 @@ pub enum Command {
         #[arg(long)]
         against: Option<String>,
 
-        /// Single glob to limit which files are audited. Replaces the
-        /// spec's include list, but the spec's exclude list is preserved
-        /// (so safety excludes like `target/**` still apply). Multi-glob
-        /// limiting is not supported — use a custom spec file for that.
-        #[arg(long)]
-        scope: Option<String>,
+        /// Glob limiting which files are audited. Repeat the flag or
+        /// separate globs with commas (`--scope 'src/**' --scope
+        /// package.json`); a file matching any of them is in scope.
+        /// Replaces the spec's include list, but the spec's exclude list
+        /// is preserved (so safety excludes like `target/**` still apply).
+        #[arg(long, value_delimiter = ',')]
+        scope: Vec<String>,
 
         /// Send files that look like secrets to the model too (withheld by
         /// default). Required to audit such a file on its own.
@@ -163,7 +165,7 @@ const DEFAULT_TEXT_AGAINST: &str = "untrusted/llm-security";
 pub async fn dispatch(cli: Cli) -> Result<u8> {
     match cli.command {
         Command::Repo { target, against, scope, include_secrets, format } => {
-            audit_repo(&target, &against, scope.as_deref(), include_secrets, format).await
+            audit_repo(&target, &against, &scope, include_secrets, format).await
         }
         Command::File { target, against, scope, include_secrets, format } => {
             // `oaudit file -` is sugar for `oaudit text` with default label
@@ -174,14 +176,14 @@ pub async fn dispatch(cli: Cli) -> Result<u8> {
             // the default after this branch keeps the two sugar forms
             // congruent when the user omits `--against`.
             if target.as_os_str() == OsStr::new("-") {
-                if scope.is_some() {
+                if !scope.is_empty() {
                     bail!(STDIN_SCOPE_REJECT_MSG);
                 }
                 let against = against.as_deref().unwrap_or(DEFAULT_TEXT_AGAINST);
                 return audit_text("stdin", against, format).await;
             }
             let against = against.as_deref().unwrap_or(DEFAULT_FILE_AGAINST);
-            audit_file(&target, against, scope.as_deref(), include_secrets, format).await
+            audit_file(&target, against, &scope, include_secrets, format).await
         }
         Command::Text { label, against, format } => {
             let against = against.as_deref().unwrap_or(DEFAULT_TEXT_AGAINST);
@@ -197,7 +199,7 @@ pub async fn dispatch(cli: Cli) -> Result<u8> {
 async fn audit_repo(
     target: &str,
     against: &str,
-    scope: Option<&str>,
+    scope: &[String],
     include_secrets: bool,
     format: Format,
 ) -> Result<u8> {
@@ -211,7 +213,7 @@ async fn audit_repo(
 async fn audit_file(
     target: &std::path::Path,
     against: &str,
-    scope: Option<&str>,
+    scope: &[String],
     include_secrets: bool,
     format: Format,
 ) -> Result<u8> {
@@ -235,7 +237,7 @@ async fn audit_text(label: &str, against: &str, format: Format) -> Result<u8> {
     let content = read_stdin().context("reading stdin")?;
     let text = crate::subject::text::new(label, content)?;
     let subject = crate::subject::Subject::Text(text);
-    audit(&subject, &specs, None, false, format).await
+    audit(&subject, &specs, &[], false, format).await
 }
 
 /// Read all of stdin into a String. Caps at `MAX_TEXT_BYTES + 1` so an
@@ -260,7 +262,7 @@ fn read_stdin() -> Result<String> {
 async fn audit(
     subject: &crate::subject::Subject,
     specs: &[crate::spec::Spec],
-    scope: Option<&str>,
+    scope: &[String],
     include_secrets: bool,
     format: Format,
 ) -> Result<u8> {
@@ -323,3 +325,25 @@ fn list_specs() -> Result<()> {
     Ok(())
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo_scope(args: &[&str]) -> Vec<String> {
+        let argv = ["oaudit", "repo", "."].iter().chain(args);
+        match Cli::try_parse_from(argv).unwrap().command {
+            Command::Repo { scope, .. } => scope,
+            other => panic!("parsed {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scope_is_repeatable_and_comma_separated() {
+        assert!(repo_scope(&[]).is_empty());
+        assert_eq!(
+            repo_scope(&["--scope", "src/**", "--scope", "package.json,bun.lock"]),
+            vec!["src/**", "package.json", "bun.lock"]
+        );
+    }
+}
