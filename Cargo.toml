@@ -88,6 +88,8 @@ console = "0.16"
 indicatif = "0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# sha256 of binary files listed (not sent) in the audit manifest
+sha2 = "0.10"
 
 # The profile that 'dist' will build with
 [profile.dist]
