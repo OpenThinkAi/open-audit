@@ -9,7 +9,11 @@ use crate::render;
 use crate::resolve;
 
 #[derive(Parser, Debug)]
-#[command(name = "oaudit", version, about = "Audit codebases against composable spec docs.")]
+#[command(
+    name = "oaudit",
+    version,
+    about = "Audit codebases against composable spec docs."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -164,10 +168,20 @@ const DEFAULT_TEXT_AGAINST: &str = "untrusted/llm-security";
 
 pub async fn dispatch(cli: Cli) -> Result<u8> {
     match cli.command {
-        Command::Repo { target, against, scope, include_secrets, format } => {
-            audit_repo(&target, &against, &scope, include_secrets, format).await
-        }
-        Command::File { target, against, scope, include_secrets, format } => {
+        Command::Repo {
+            target,
+            against,
+            scope,
+            include_secrets,
+            format,
+        } => audit_repo(&target, &against, &scope, include_secrets, format).await,
+        Command::File {
+            target,
+            against,
+            scope,
+            include_secrets,
+            format,
+        } => {
             // `oaudit file -` is sugar for `oaudit text` with default label
             // `stdin`. Sniff before any path canonicalization so `-` doesn't
             // round-trip through a "path does not exist" error. The default
@@ -185,13 +199,19 @@ pub async fn dispatch(cli: Cli) -> Result<u8> {
             let against = against.as_deref().unwrap_or(DEFAULT_FILE_AGAINST);
             audit_file(&target, against, &scope, include_secrets, format).await
         }
-        Command::Text { label, against, format } => {
+        Command::Text {
+            label,
+            against,
+            format,
+        } => {
             let against = against.as_deref().unwrap_or(DEFAULT_TEXT_AGAINST);
             audit_text(&label, against, format).await
         }
         Command::List => list_specs().map(|_| 0),
         Command::Explain { spec, open } => explain(&spec, open).await.map(|_| 0),
-        Command::Init => crate::init::scaffold(std::env::current_dir()?).await.map(|_| 0),
+        Command::Init => crate::init::scaffold(std::env::current_dir()?)
+            .await
+            .map(|_| 0),
         Command::Update { yes } => crate::update::run(yes).await.map(|_| 0),
     }
 }
@@ -308,8 +328,10 @@ fn list_specs() -> Result<()> {
         println!();
         println!("(no repo-local specs at .oaudit/auditors/ — `oaudit init` scaffolds it)");
     } else {
-        let builtin_paths: HashSet<&str> =
-            crate::builtins::all().iter().map(|b| b.catalog_path).collect();
+        let builtin_paths: HashSet<&str> = crate::builtins::all()
+            .iter()
+            .map(|b| b.catalog_path)
+            .collect();
         println!();
         println!("repo-local specs (use `oaudit explain <mode>/<name>` to view):");
         for (catalog, path) in &local {

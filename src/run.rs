@@ -112,10 +112,18 @@ fn safety_stop_finding(mode: Mode) -> Finding {
     use crate::finding::{Confidence, Location, Severity};
     blank_finding(
         "oaudit-safety-stop",
-        if mode == Mode::Untrusted { Severity::Critical } else { Severity::High },
+        if mode == Mode::Untrusted {
+            Severity::Critical
+        } else {
+            Severity::High
+        },
         Confidence::Medium,
         "The auditor's safety filter stopped its response to this subject",
-        Location { file: "(subject)".to_string(), line: 0, end_line: None },
+        Location {
+            file: "(subject)".to_string(),
+            line: 0,
+            end_line: None,
+        },
         "Claude's safeguards cut off the audit reply while it was describing something in \
          these files. That almost always means the subject contains code the model judged \
          to be malicious (credential theft, exfiltration, malware). Findings from the partial \
@@ -173,7 +181,9 @@ fn unaudited_files_finding(stats: &GatherStats) -> Option<Finding> {
     use crate::finding::{Confidence, Location, Severity};
     let skipped = &stats.skipped_files;
     let first = skipped.first()?;
-    let only_binary = skipped.iter().all(|s| matches!(s.reason, SkipReason::Binary { .. }));
+    let only_binary = skipped
+        .iter()
+        .all(|s| matches!(s.reason, SkipReason::Binary { .. }));
     let listing: Vec<String> = skipped
         .iter()
         .take(50)
@@ -188,10 +198,18 @@ fn unaudited_files_finding(stats: &GatherStats) -> Option<Finding> {
     let more = total.saturating_sub(listing.len());
     let mut f = blank_finding(
         "oaudit-unaudited-files",
-        if only_binary { Severity::Low } else { Severity::Medium },
+        if only_binary {
+            Severity::Low
+        } else {
+            Severity::Medium
+        },
         Confidence::High,
         format!("{total} file(s) were not shown to the auditor"),
-        Location { file: first.path.clone(), line: 0, end_line: None },
+        Location {
+            file: first.path.clone(),
+            line: 0,
+            end_line: None,
+        },
         "These files were skipped (too large, binary, unreadable, or withheld as \
          possible secrets), so nothing in this report covers them. In untrusted \
          code that is a blind spot an author could use deliberately."
@@ -203,7 +221,11 @@ fn unaudited_files_finding(stats: &GatherStats) -> Option<Finding> {
     f.evidence = format!(
         "{}{}",
         listing.join("\n"),
-        if more > 0 { format!("\n… and {more} more") } else { String::new() }
+        if more > 0 {
+            format!("\n… and {more} more")
+        } else {
+            String::new()
+        }
     );
     // Covers the whole run, not one spec.
     f.spec = Some("oaudit".to_string());
@@ -219,18 +241,36 @@ fn flagged_binaries_finding(stats: &GatherStats) -> Option<Finding> {
     use crate::finding::{Confidence, Location, Severity};
     let flagged: Vec<_> = stats
         .binary_manifest()
-        .filter(|s| !matches!(s.reason, SkipReason::Binary { kind: BinaryKind::Data, .. }))
+        .filter(|s| {
+            !matches!(
+                s.reason,
+                SkipReason::Binary {
+                    kind: BinaryKind::Data,
+                    ..
+                }
+            )
+        })
         .collect();
     let first = flagged.first()?;
-    let listing: Vec<String> =
-        flagged.iter().take(50).map(|s| format!("{} ({})", s.path, s.reason)).collect();
+    let listing: Vec<String> = flagged
+        .iter()
+        .take(50)
+        .map(|s| format!("{} ({})", s.path, s.reason))
+        .collect();
     let more = flagged.len().saturating_sub(listing.len());
     let mut f = blank_finding(
         "oaudit-executable-binaries",
         Severity::Medium,
         Confidence::High,
-        format!("{} executable or archive file(s) in the subject were not audited", flagged.len()),
-        Location { file: first.path.clone(), line: 0, end_line: None },
+        format!(
+            "{} executable or archive file(s) in the subject were not audited",
+            flagged.len()
+        ),
+        Location {
+            file: first.path.clone(),
+            line: 0,
+            end_line: None,
+        },
         "These binaries carry an executable, bytecode, script or archive signature. \
          The model can't see inside them, and in untrusted code a committed binary is \
          a common way to ship a payload that no source file shows."
@@ -243,7 +283,11 @@ fn flagged_binaries_finding(stats: &GatherStats) -> Option<Finding> {
     f.evidence = format!(
         "{}{}",
         listing.join("\n"),
-        if more > 0 { format!("\n… and {more} more") } else { String::new() }
+        if more > 0 {
+            format!("\n… and {more} more")
+        } else {
+            String::new()
+        }
     );
     f.spec = Some("oaudit".to_string());
     Some(f)
@@ -333,17 +377,27 @@ fn build_user_prompt(chunks: &[crate::evidence::EvidenceChunk], stats: &GatherSt
              suspicion.\n<{btag}>\n"
         ));
         for b in &binaries {
-            if let SkipReason::Binary { bytes, sha256, kind, format } = &b.reason {
+            if let SkipReason::Binary {
+                bytes,
+                sha256,
+                kind,
+                format,
+            } = &b.reason
+            {
                 out.push_str(&format!(
                     "path=\"{}\" bytes={bytes} sha256={} kind={kind}{}\n",
                     escape_attr(&b.path),
                     sha256.as_deref().unwrap_or("not-hashed"),
-                    format.map(|f| format!(" format=\"{f}\"")).unwrap_or_default(),
+                    format
+                        .map(|f| format!(" format=\"{f}\""))
+                        .unwrap_or_default(),
                 ));
             }
         }
         if unlisted > 0 {
-            out.push_str(&format!("… and {unlisted} more binary file(s), not listed\n"));
+            out.push_str(&format!(
+                "… and {unlisted} more binary file(s), not listed\n"
+            ));
         }
         out.push_str(&format!("</{btag}>\n\n"));
         format!("<{tag}> and <{btag}> tags")
@@ -552,8 +606,14 @@ mod tests {
         assert!(unaudited_files_finding(&GatherStats::default()).is_none());
 
         let mut stats = GatherStats::default();
-        stats.skipped_files.push(SkippedFile { path: "logo.png".into(), reason: data_binary() });
-        assert_eq!(unaudited_files_finding(&stats).unwrap().severity, Severity::Low);
+        stats.skipped_files.push(SkippedFile {
+            path: "logo.png".into(),
+            reason: data_binary(),
+        });
+        assert_eq!(
+            unaudited_files_finding(&stats).unwrap().severity,
+            Severity::Low
+        );
 
         stats.skipped_files.push(SkippedFile {
             path: "payload.js".into(),
@@ -577,7 +637,10 @@ mod tests {
         use crate::evidence::{BinaryKind, SkipReason, SkippedFile};
         let mut stats = GatherStats::default();
         stats.skipped_binary = 3;
-        stats.skipped_files.push(SkippedFile { path: "models/m.bin".into(), reason: data_binary() });
+        stats.skipped_files.push(SkippedFile {
+            path: "models/m.bin".into(),
+            reason: data_binary(),
+        });
         stats.skipped_files.push(SkippedFile {
             path: "bin/tool\">".into(),
             reason: SkipReason::Binary {
@@ -632,7 +695,10 @@ mod tests {
         use crate::evidence::SkippedFile;
         use crate::finding::Severity;
         let mut stats = GatherStats::default();
-        stats.skipped_files.push(SkippedFile { path: "logo.png".into(), reason: data_binary() });
+        stats.skipped_files.push(SkippedFile {
+            path: "logo.png".into(),
+            reason: data_binary(),
+        });
         assert!(flagged_binaries_finding(&stats).is_none());
 
         let stats = stats_with_binaries();
