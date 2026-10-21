@@ -15,9 +15,12 @@ pub struct File {
 }
 
 pub(crate) async fn open(target: &Path) -> Result<File> {
-    let canonical = target
-        .canonicalize()
-        .with_context(|| format!("path `{}` does not exist or is not accessible", target.display()))?;
+    let canonical = target.canonicalize().with_context(|| {
+        format!(
+            "path `{}` does not exist or is not accessible",
+            target.display()
+        )
+    })?;
 
     let meta = std::fs::metadata(&canonical)
         .with_context(|| format!("reading metadata for {}", canonical.display()))?;
@@ -46,7 +49,10 @@ mod tests {
     async fn opens_a_directory() {
         let tmp = tempdir().unwrap();
         let f = open(tmp.path()).await.unwrap();
-        assert_eq!(f.root.canonicalize().unwrap(), tmp.path().canonicalize().unwrap());
+        assert_eq!(
+            f.root.canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
         assert!(f.root.is_dir());
     }
 

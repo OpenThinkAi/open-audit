@@ -9,6 +9,8 @@ branches:
         run: cargo build --locked
       - name: test
         run: cargo test --locked
+      - name: fmt
+        run: cargo fmt --check
 reviewers:
   security:
     prompt: .stamp/reviewers/security.md
