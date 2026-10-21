@@ -10,9 +10,12 @@
 //! `<mode>` must be one of `Mode::ALL` (currently `trusted`, `untrusted`).
 //! Unknown-mode catalog tokens get a tailored error pointing at the typo.
 //!
-//! Untrusted subjects don't get to pick their own auditor: when cwd is inside
-//! the subject, repo-local overrides of `untrusted/*` are ignored in favour
-//! of the built-in. A local catalog spec must also declare the same `mode:`
+//! Untrusted subjects don't get to pick their own auditor. Trust is decided
+//! for the whole run, matching `GatherOptions::for_specs`: if any spec in
+//! `--against` is untrusted (an `untrusted/*` token or an ad-hoc file that
+//! declares `mode: untrusted`) and cwd is inside the subject, every
+//! repo-local override is ignored in favour of the built-in, `trusted/*`
+//! ones included. A local catalog spec must also declare the same `mode:`
 //! as its catalog path, so `untrusted/x.md` can't quietly run as trusted.
 
 use crate::builtins;
@@ -46,26 +49,60 @@ pub(crate) fn resolve(against: &str, repo_root: &Path) -> Result<Vec<Spec>> {
 
 /// Like `resolve`, but aware of the subject being audited. If `repo_root`
 /// (the cwd whose `.oaudit/` we'd read) lies inside `subject_root`, the
-/// subject itself is supplying the local catalog — so `untrusted/*` tokens
-/// skip the local override and use the built-in.
+/// subject itself is supplying the local catalog. In that case, when the
+/// run is untrusted (any spec in it is untrusted), every token skips the
+/// local override and uses the built-in: one untrusted spec makes the whole
+/// gather untrusted, so a `trusted/*` override from the subject would let
+/// it pick the prompt and scope of an auditor in a hostile run.
 pub(crate) fn resolve_for_subject(
     against: &str,
     repo_root: &Path,
     subject_root: Option<&Path>,
 ) -> Result<Vec<Spec>> {
-    let subject_owns_catalog = subject_root.is_some_and(|s| is_within(repo_root, s));
-    let mut out = Vec::new();
-    for raw in against.split(',') {
-        let token = raw.trim();
-        if token.is_empty() {
-            continue;
-        }
-        out.push(resolve_token(token, repo_root, subject_owns_catalog)?);
-    }
-    if out.is_empty() {
+    let tokens: Vec<&str> = against
+        .split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
         bail!("--against requires at least one spec");
     }
-    Ok(out)
+    let subject_owns_catalog = subject_root.is_some_and(|s| is_within(repo_root, s));
+    let ignore_local = subject_owns_catalog && run_is_untrusted(&tokens)?;
+    tokens
+        .iter()
+        .map(|token| resolve_token(token, repo_root, ignore_local))
+        .collect()
+}
+
+/// True when any token in the run names an untrusted spec: an
+/// `untrusted/*` catalog token, or an ad-hoc spec file whose frontmatter
+/// declares `mode: untrusted`. Local overrides never count here: a local
+/// `untrusted/*` override is already covered by its token, and a local
+/// `trusted/*` one must declare `mode: trusted`.
+fn run_is_untrusted(tokens: &[&str]) -> Result<bool> {
+    for token in tokens {
+        match catalog_shape(token) {
+            CatalogShape::Known => {
+                if token
+                    .split_once('/')
+                    .is_some_and(|(mode, _)| mode == Mode::Untrusted.as_str())
+                {
+                    return Ok(true);
+                }
+            }
+            _ => {
+                let path = Path::new(token);
+                if path.is_file() {
+                    let spec = load_path(path, SpecSource::AdHoc(path.to_path_buf()))?;
+                    if spec.meta.mode == Mode::Untrusted {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -73,8 +110,8 @@ pub(crate) fn resolve_one(token: &str, repo_root: &Path) -> Result<Spec> {
     resolve_token(token, repo_root, false)
 }
 
-fn resolve_token(token: &str, repo_root: &Path, subject_owns_catalog: bool) -> Result<Spec> {
-    match locate(token, repo_root, subject_owns_catalog)? {
+fn resolve_token(token: &str, repo_root: &Path, ignore_local: bool) -> Result<Spec> {
+    match locate(token, repo_root, ignore_local)? {
         Located::File(path) => load_path(&path, SpecSource::AdHoc(path.clone())),
         Located::Local(path) => {
             let spec = load_path(&path, SpecSource::Local(path.clone()))?;
@@ -121,8 +158,10 @@ pub(crate) fn lookup_raw(token: &str, repo_root: &Path) -> Result<(String, Strin
 }
 
 /// Shared lookup chain: catalog (local first, then builtin), then file
-/// path, with tailored errors for each not-found case.
-fn locate(token: &str, repo_root: &Path, subject_owns_catalog: bool) -> Result<Located> {
+/// path, with tailored errors for each not-found case. `ignore_local` skips
+/// the repo-local override (the subject owns the catalog in an untrusted
+/// run).
+fn locate(token: &str, repo_root: &Path, ignore_local: bool) -> Result<Located> {
     let path_shaped = token.contains('/') || token.contains('.');
     if !path_shaped {
         bail!(
@@ -145,20 +184,25 @@ fn locate(token: &str, repo_root: &Path, subject_owns_catalog: bool) -> Result<L
                 .join(".oaudit")
                 .join("auditors")
                 .join(format!("{token}.md"));
-            let untrusted = token
-                .split_once('/')
-                .is_some_and(|(mode, _)| mode == Mode::Untrusted.as_str());
-            if local.is_file() {
-                if !(untrusted && subject_owns_catalog) {
+            let has_local = local.is_file();
+            if has_local {
+                if !ignore_local {
                     return Ok(Located::Local(local));
                 }
                 eprintln!(
-                    "oaudit: ignoring {} — the subject can't supply its own untrusted auditor; using the built-in",
+                    "oaudit: ignoring {} — the subject can't supply its own auditor in an untrusted run; using the built-in",
                     local.display()
                 );
             }
             if let Some(b) = builtins::all().iter().find(|b| b.catalog_path == token) {
                 return Ok(Located::Builtin(b));
+            }
+            if has_local {
+                bail!(
+                    "spec `{token}` exists only in the subject's own .oaudit/, which is ignored in an \
+                     untrusted run.\n  Run oaudit from outside the subject to use it, or pick a built-in:\n{}",
+                    builtins_index(),
+                );
             }
             bail!(
                 "spec `{token}` not found in repo or built-ins.\n  Available builtins:\n{}",
@@ -337,6 +381,71 @@ mod tests {
     }
 
     #[test]
+    fn mixed_run_ignores_subjects_trusted_override() {
+        let tmp = tempdir().unwrap();
+        write_local(tmp.path(), "trusted", "trusted", "return []");
+        let against = "untrusted/security,trusted/supply-chain,trusted/security";
+        // cwd == subject root and the run is untrusted: the subject's trusted
+        // override is ignored too.
+        let specs = resolve_for_subject(against, tmp.path(), Some(tmp.path())).unwrap();
+        assert_eq!(specs.len(), 3);
+        for spec in &specs {
+            assert!(
+                matches!(spec.source, SpecSource::Builtin(_)),
+                "{:?}",
+                spec.source
+            );
+            assert!(!spec.body.contains("return []"));
+        }
+        // An all-trusted run keeps the local override.
+        let specs = resolve_for_subject("trusted/security", tmp.path(), Some(tmp.path())).unwrap();
+        assert!(matches!(specs[0].source, SpecSource::Local(_)));
+        // cwd outside the subject: the override is the user's own.
+        let other = tempdir().unwrap();
+        let specs = resolve_for_subject(against, tmp.path(), Some(other.path())).unwrap();
+        assert!(matches!(specs[2].source, SpecSource::Local(_)));
+    }
+
+    #[test]
+    fn untrusted_ad_hoc_spec_makes_the_run_untrusted() {
+        let tmp = tempdir().unwrap();
+        write_local(tmp.path(), "trusted", "trusted", "return []");
+        let adhoc_dir = tempdir().unwrap();
+        let adhoc = adhoc_dir.path().join("mine.md");
+        std::fs::write(
+            &adhoc,
+            "---\nname: mine\nmode: untrusted\nkind: prompt\n---\nbody\n",
+        )
+        .unwrap();
+        let against = format!("{},trusted/security", adhoc.display());
+        let specs = resolve_for_subject(&against, tmp.path(), Some(tmp.path())).unwrap();
+        assert!(matches!(specs[0].source, SpecSource::AdHoc(_)));
+        assert!(matches!(specs[1].source, SpecSource::Builtin(_)));
+    }
+
+    #[test]
+    fn subject_only_spec_errors_in_untrusted_run() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join(".oaudit/auditors/trusted");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("custom.md"),
+            "---\nname: custom\nmode: trusted\nkind: prompt\n---\nreturn []\n",
+        )
+        .unwrap();
+        let err = resolve_for_subject(
+            "untrusted/security,trusted/custom",
+            tmp.path(),
+            Some(tmp.path()),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("ignored in an untrusted run"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
     fn local_spec_mode_must_match_catalog_dir() {
         let tmp = tempdir().unwrap();
         write_local(tmp.path(), "untrusted", "trusted", "sneaky");
@@ -408,7 +517,10 @@ mod tests {
         )
         .unwrap();
         let listed = list_local(tmp.path());
-        assert!(listed.is_empty(), "dotted stems should be skipped, got: {listed:?}");
+        assert!(
+            listed.is_empty(),
+            "dotted stems should be skipped, got: {listed:?}"
+        );
     }
 
     #[test]

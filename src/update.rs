@@ -43,8 +43,8 @@ pub(crate) async fn run(yes: bool) -> Result<()> {
     // wrapper alongside a competing binary on PATH).
     let on_scoped_npm = exe_str.contains("node_modules/@openthink/audit")
         || exe_str.contains("node_modules\\@openthink\\audit");
-    let on_legacy_npm = exe_str.contains("node_modules/open-audit")
-        || exe_str.contains("node_modules\\open-audit");
+    let on_legacy_npm =
+        exe_str.contains("node_modules/open-audit") || exe_str.contains("node_modules\\open-audit");
     if on_scoped_npm || on_legacy_npm {
         if on_legacy_npm {
             eprintln!(
@@ -115,9 +115,8 @@ async fn run_shell_installer(current_exe: &str, yes: bool) -> Result<()> {
     // require bash explicitly — the cargo-dist installer being piped
     // in also requires bash, so we're not adding a dependency.
     // --proto/--tlsv1.2: refuse any redirect off HTTPS or a TLS downgrade.
-    let script = format!(
-        "set -euo pipefail; curl --proto '=https' --tlsv1.2 -LsSf {INSTALLER_URL} | sh"
-    );
+    let script =
+        format!("set -euo pipefail; curl --proto '=https' --tlsv1.2 -LsSf {INSTALLER_URL} | sh");
     let status = Command::new("bash")
         .arg("-c")
         .arg(&script)
@@ -142,12 +141,13 @@ fn looks_package_manager_owned(path: &str) -> bool {
     // Common package-manager bin dirs. Not exhaustive — best-effort
     // hint to a user about to silently shadow a managed install.
     const MARKERS: &[&str] = &[
-        "/opt/homebrew/",   // Apple Silicon Homebrew
-        "/usr/local/Cellar/", "/usr/local/opt/", // Intel Homebrew
+        "/opt/homebrew/", // Apple Silicon Homebrew
+        "/usr/local/Cellar/",
+        "/usr/local/opt/",  // Intel Homebrew
         "/home/linuxbrew/", // Linuxbrew
         "/usr/bin/",        // apt / pacman / dnf
         "/usr/sbin/",
-        "/nix/store/",      // Nix
+        "/nix/store/", // Nix
     ];
     MARKERS.iter().any(|m| path.contains(m))
 }

@@ -41,7 +41,11 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     let out = Output {
         report,
         gather: GatherStatsJson {
-            coverage: if stats.coverage_partial() { "partial" } else { "complete" },
+            coverage: if stats.coverage_partial() {
+                "partial"
+            } else {
+                "complete"
+            },
             skipped_too_large: stats.skipped_too_large,
             skipped_binary: stats.skipped_binary,
             skipped_io_error: stats.skipped_io_error,
@@ -63,7 +67,10 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
     let dim = Style::new().dim();
 
     // Header
-    println!("{}", style(format!("audit: {}", clean(&report.subject))).bold());
+    println!(
+        "{}",
+        style(format!("audit: {}", clean(&report.subject))).bold()
+    );
     println!(
         "{}",
         dim.apply_to(format!(
@@ -89,7 +96,10 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             parts.push(format!("{} I/O error", stats.skipped_io_error));
         }
         if stats.skipped_secret > 0 {
-            parts.push(format!("{} withheld as possible secrets", stats.skipped_secret));
+            parts.push(format!(
+                "{} withheld as possible secrets",
+                stats.skipped_secret
+            ));
         }
         println!(
             "{}",
@@ -104,12 +114,22 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         for skip in stats.skipped_files.iter().take(HUMAN_SKIP_LIST_MAX) {
             println!(
                 "{}",
-                dim.apply_to(format!("  - {} ({})", clean(&skip.path), clean(&skip.reason.to_string())))
+                dim.apply_to(format!(
+                    "  - {} ({})",
+                    clean(&skip.path),
+                    clean(&skip.reason.to_string())
+                ))
             );
         }
-        let more = stats.skipped_files.len().saturating_sub(HUMAN_SKIP_LIST_MAX);
+        let more = stats
+            .skipped_files
+            .len()
+            .saturating_sub(HUMAN_SKIP_LIST_MAX);
         if more > 0 {
-            println!("{}", dim.apply_to(format!("  … and {more} more (--format json lists them)")));
+            println!(
+                "{}",
+                dim.apply_to(format!("  … and {more} more (--format json lists them)"))
+            );
         }
     }
     println!();
@@ -160,11 +180,20 @@ fn print_finding(f: &Finding) {
         Style::new().dim().apply_to(location)
     );
     if let Some(spec) = &f.spec {
-        println!("  {}", Style::new().dim().apply_to(format!("from: {}", clean(spec))));
+        println!(
+            "  {}",
+            Style::new()
+                .dim()
+                .apply_to(format!("from: {}", clean(spec)))
+        );
     }
     println!("  {}", clean(&f.explanation));
     if !f.suggestion.is_empty() {
-        println!("  {}: {}", Style::new().green().apply_to("→"), clean(&f.suggestion));
+        println!(
+            "  {}: {}",
+            Style::new().green().apply_to("→"),
+            clean(&f.suggestion)
+        );
     }
     println!();
 }
@@ -246,12 +275,17 @@ mod tests {
         stats.skipped_io_error = 1;
         stats.io_error_samples.push("x: permission denied".into());
         stats.skipped_secret = 1;
-        stats.skipped_files.push(SkippedFile { path: ".env".into(), reason: SkipReason::PossibleSecret });
+        stats.skipped_files.push(SkippedFile {
+            path: ".env".into(),
+            reason: SkipReason::PossibleSecret,
+        });
         assert!(show_io_samples(&stats));
 
         stats.skipped_files.push(SkippedFile {
             path: "x".into(),
-            reason: SkipReason::Unreadable { error: "permission denied".into() },
+            reason: SkipReason::Unreadable {
+                error: "permission denied".into(),
+            },
         });
         assert!(!show_io_samples(&stats));
     }
@@ -314,7 +348,10 @@ mod tests {
         assert_eq!(exit_code(&report(vec![finding(Severity::High)])), 1);
         assert_eq!(exit_code(&report(vec![finding(Severity::Critical)])), 1);
         assert_eq!(
-            exit_code(&report(vec![finding(Severity::Low), finding(Severity::High)])),
+            exit_code(&report(vec![
+                finding(Severity::Low),
+                finding(Severity::High)
+            ])),
             1
         );
     }

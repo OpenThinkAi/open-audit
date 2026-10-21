@@ -234,7 +234,10 @@ impl ListClass {
 
     fn of(reason: &SkipReason) -> Self {
         match reason {
-            SkipReason::Binary { kind: BinaryKind::Data, .. } => ListClass::DataBinary,
+            SkipReason::Binary {
+                kind: BinaryKind::Data,
+                ..
+            } => ListClass::DataBinary,
             SkipReason::Binary { .. } => ListClass::FlaggedBinary,
             _ => ListClass::Other,
         }
@@ -284,7 +287,12 @@ impl std::fmt::Display for SkipReason {
             SkipReason::TooLarge { bytes } => {
                 write!(f, "too large ({bytes} bytes, limit {MAX_FILE_BYTES})")
             }
-            SkipReason::Binary { bytes, sha256, kind, format } => {
+            SkipReason::Binary {
+                bytes,
+                sha256,
+                kind,
+                format,
+            } => {
                 write!(f, "binary, {}, ", human_bytes(*bytes))?;
                 match sha256 {
                     Some(h) => write!(f, "sha256 {h}")?,
@@ -587,7 +595,13 @@ fn over_budget_message(
     let mut groups: Vec<(&str, u64, bool)> =
         groups.into_iter().map(|(k, (n, d))| (k, n, d)).collect();
     groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-    let shown = |name: &str, is_dir: bool| if is_dir { format!("{name}/") } else { name.to_string() };
+    let shown = |name: &str, is_dir: bool| {
+        if is_dir {
+            format!("{name}/")
+        } else {
+            name.to_string()
+        }
+    };
 
     let mut msg = format!(
         "text files in scope under {} total {}{} — over the {} limit for one audit.\n  \
@@ -596,7 +610,10 @@ fn over_budget_message(
         root.display(),
         human_bytes(total),
         if truncated {
-            format!(" or more (stopped counting after {} text files)", sizes.len())
+            format!(
+                " or more (stopped counting after {} text files)",
+                sizes.len()
+            )
         } else {
             String::new()
         },
@@ -629,7 +646,10 @@ fn over_budget_message(
             .iter()
             .map(|(name, _, is_dir)| {
                 let glob = Pattern::escape(name);
-                format!("--scope '{}'", if *is_dir { format!("{glob}/**") } else { glob })
+                format!(
+                    "--scope '{}'",
+                    if *is_dir { format!("{glob}/**") } else { glob }
+                )
             })
             .collect();
         let _ = write!(
@@ -677,7 +697,10 @@ impl CompiledScope {
         if !included {
             return false;
         }
-        !self.exclude.iter().any(|p| p.matches_with(rel_path, GLOB_OPTS))
+        !self
+            .exclude
+            .iter()
+            .any(|p| p.matches_with(rel_path, GLOB_OPTS))
     }
 }
 
@@ -739,7 +762,11 @@ fn is_possible_secret(rel_path: &str) -> bool {
     {
         return true;
     }
-    if name == "config.json" && dirs.last().is_some_and(|d| d.eq_ignore_ascii_case(".docker")) {
+    if name == "config.json"
+        && dirs
+            .last()
+            .is_some_and(|d| d.eq_ignore_ascii_case(".docker"))
+    {
         return true;
     }
     if let Some(suffix) = name.strip_prefix(".env.") {
@@ -751,7 +778,10 @@ fn is_possible_secret(rel_path: &str) -> bool {
 }
 
 enum ReadOutcome {
-    Text { content: String, lossy: bool },
+    Text {
+        content: String,
+        lossy: bool,
+    },
     /// Text over the per-file limit; carries the observed size.
     TooLarge(u64),
     /// Always a `SkipReason::Binary`.
@@ -774,7 +804,11 @@ fn read_text(path: &Path, max_bytes: u64) -> std::io::Result<ReadOutcome> {
         // Report the real size when we can; fall back to "at least".
         let bytes = std::fs::metadata(path).map_or(buf.len() as u64, |m| m.len());
         if is_binary(head, head) {
-            return Ok(ReadOutcome::Binary(binary_reason(head, bytes, hash_file(path)?)));
+            return Ok(ReadOutcome::Binary(binary_reason(
+                head,
+                bytes,
+                hash_file(path)?,
+            )));
         }
         return Ok(ReadOutcome::TooLarge(bytes));
     }
@@ -837,8 +871,18 @@ struct Magic {
     format: &'static str,
 }
 
-const fn magic(offset: usize, bytes: &'static [u8], kind: BinaryKind, format: &'static str) -> Magic {
-    Magic { offset, bytes, kind, format }
+const fn magic(
+    offset: usize,
+    bytes: &'static [u8],
+    kind: BinaryKind,
+    format: &'static str,
+) -> Magic {
+    Magic {
+        offset,
+        bytes,
+        kind,
+        format,
+    }
 }
 
 /// Signatures worth calling out. Not exhaustive; anything else is `Data`.
@@ -846,23 +890,63 @@ const fn magic(offset: usize, bytes: &'static [u8], kind: BinaryKind, format: &'
 /// false "executable" costs a look, a missed one costs coverage.
 const MAGICS: &[Magic] = &[
     magic(0, b"\x7fELF", BinaryKind::Executable, "ELF"),
-    magic(0, &[0xfe, 0xed, 0xfa, 0xce], BinaryKind::Executable, "Mach-O"),
-    magic(0, &[0xce, 0xfa, 0xed, 0xfe], BinaryKind::Executable, "Mach-O"),
-    magic(0, &[0xfe, 0xed, 0xfa, 0xcf], BinaryKind::Executable, "Mach-O"),
-    magic(0, &[0xcf, 0xfa, 0xed, 0xfe], BinaryKind::Executable, "Mach-O"),
-    magic(0, &[0xca, 0xfe, 0xba, 0xbe], BinaryKind::Executable, "Mach-O universal or Java class"),
+    magic(
+        0,
+        &[0xfe, 0xed, 0xfa, 0xce],
+        BinaryKind::Executable,
+        "Mach-O",
+    ),
+    magic(
+        0,
+        &[0xce, 0xfa, 0xed, 0xfe],
+        BinaryKind::Executable,
+        "Mach-O",
+    ),
+    magic(
+        0,
+        &[0xfe, 0xed, 0xfa, 0xcf],
+        BinaryKind::Executable,
+        "Mach-O",
+    ),
+    magic(
+        0,
+        &[0xcf, 0xfa, 0xed, 0xfe],
+        BinaryKind::Executable,
+        "Mach-O",
+    ),
+    magic(
+        0,
+        &[0xca, 0xfe, 0xba, 0xbe],
+        BinaryKind::Executable,
+        "Mach-O universal or Java class",
+    ),
     magic(0, b"MZ", BinaryKind::Executable, "PE (Windows executable)"),
     magic(0, b"\0asm", BinaryKind::Executable, "WebAssembly"),
     magic(0, b"dex\n", BinaryKind::Executable, "Dalvik"),
-    magic(0, b"#!", BinaryKind::Executable, "script with binary content"),
+    magic(
+        0,
+        b"#!",
+        BinaryKind::Executable,
+        "script with binary content",
+    ),
     magic(0, b"PK\x03\x04", BinaryKind::Archive, "zip"),
     magic(0, b"PK\x05\x06", BinaryKind::Archive, "zip"),
     magic(0, b"PK\x07\x08", BinaryKind::Archive, "zip"),
     magic(0, &[0x1f, 0x8b], BinaryKind::Archive, "gzip"),
     magic(0, b"BZh", BinaryKind::Archive, "bzip2"),
-    magic(0, &[0xfd, b'7', b'z', b'X', b'Z', 0], BinaryKind::Archive, "xz"),
+    magic(
+        0,
+        &[0xfd, b'7', b'z', b'X', b'Z', 0],
+        BinaryKind::Archive,
+        "xz",
+    ),
     magic(0, &[0x28, 0xb5, 0x2f, 0xfd], BinaryKind::Archive, "zstd"),
-    magic(0, &[b'7', b'z', 0xbc, 0xaf, 0x27, 0x1c], BinaryKind::Archive, "7z"),
+    magic(
+        0,
+        &[b'7', b'z', 0xbc, 0xaf, 0x27, 0x1c],
+        BinaryKind::Archive,
+        "7z",
+    ),
     magic(0, b"Rar!\x1a\x07", BinaryKind::Archive, "rar"),
     magic(0, b"!<arch>\n", BinaryKind::Archive, "ar"),
     magic(0, b"MSCF", BinaryKind::Archive, "cab"),
@@ -878,7 +962,12 @@ fn classify(head: &[u8]) -> (BinaryKind, Option<&'static str>) {
 
 fn binary_reason(head: &[u8], bytes: u64, sha256: Option<String>) -> SkipReason {
     let (kind, format) = classify(head);
-    SkipReason::Binary { bytes, sha256, kind, format }
+    SkipReason::Binary {
+        bytes,
+        sha256,
+        kind,
+        format,
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -968,7 +1057,10 @@ fn walk_error_path(err: &ignore::Error, root: &Path) -> Option<String> {
 /// active." A user who wants a true clean slate should set both via a
 /// custom spec file rather than `--scope`.
 fn effective_scope(spec: &Spec, scope_override: &[String]) -> Result<CompiledScope> {
-    let over: Vec<String> = scope_override.iter().map(|g| g.trim().to_string()).collect();
+    let over: Vec<String> = scope_override
+        .iter()
+        .map(|g| g.trim().to_string())
+        .collect();
     if over.iter().any(String::is_empty) {
         bail!("empty --scope glob. Pass globs like --scope 'src/**' --scope package.json.");
     }
@@ -1083,7 +1175,11 @@ mod tests {
         );
         let res = gather(&subject, &spec, &[]).unwrap();
         assert_eq!(res.chunks.len(), 1);
-        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let paths: Vec<&str> = res.chunks[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
         assert!(paths.contains(&"src/lib.rs"));
         assert!(paths.contains(&"README.md"));
         assert_eq!(res.stats.skipped_too_large, 0);
@@ -1101,7 +1197,11 @@ mod tests {
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: [\"target/**\"]\n---\n",
         );
         let res = gather(&subject, &spec, &[]).unwrap();
-        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let paths: Vec<&str> = res.chunks[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
         assert!(paths.contains(&"src/main.rs"));
         assert!(!paths.iter().any(|p| p.starts_with("target/")));
     }
@@ -1117,7 +1217,11 @@ mod tests {
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n",
         );
         let res = gather(&subject, &spec, &["src/**".to_string()]).unwrap();
-        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let paths: Vec<&str> = res.chunks[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
         assert!(paths.contains(&"src/a.rs"));
         assert!(!paths.iter().any(|p| p.starts_with("docs/")));
     }
@@ -1136,7 +1240,11 @@ mod tests {
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: [\"src/sub/**\"]\n---\n",
         );
         let res = gather(&subject, &spec, &["src/**".to_string()]).unwrap();
-        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let paths: Vec<&str> = res.chunks[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
         assert!(paths.contains(&"src/a.rs"));
         assert!(!paths.iter().any(|p| p.starts_with("src/sub/")));
     }
@@ -1153,7 +1261,11 @@ mod tests {
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n",
         );
         let res = gather(&subject, &spec, &[]).unwrap();
-        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let paths: Vec<&str> = res.chunks[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
         assert!(paths.contains(&"small.txt"));
         assert!(!paths.contains(&"big.txt"));
         assert_eq!(res.stats.skipped_too_large, 1);
@@ -1170,7 +1282,11 @@ mod tests {
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n",
         );
         let res = gather(&subject, &spec, &[]).unwrap();
-        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let paths: Vec<&str> = res.chunks[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
         assert!(paths.contains(&"src/text.rs"));
         assert!(!paths.contains(&"data.bin"));
         assert_eq!(res.stats.skipped_binary, 1);
@@ -1184,11 +1300,13 @@ mod tests {
         let subject = make_subject(tmp.path());
         // Spec with NO default_scope at all — exercises the (None, None)
         // branch in effective_scope which now ships fallback excludes.
-        let spec = parse_spec(
-            "---\nname: t\nmode: trusted\nkind: prompt\n---\n",
-        );
+        let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
         let res = gather(&subject, &spec, &[]).unwrap();
-        let paths: Vec<&str> = res.chunks[0].files.iter().map(|f| f.path.as_str()).collect();
+        let paths: Vec<&str> = res.chunks[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
         assert!(paths.contains(&"src/lib.rs"));
         assert!(
             !paths.iter().any(|p| p.starts_with(".git/")),
@@ -1201,9 +1319,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("foo.rs");
         write(&path, "fn x() {}");
-        let subject = Subject::File(crate::subject::file::File {
-            root: path.clone(),
-        });
+        let subject = Subject::File(crate::subject::file::File { root: path.clone() });
         let spec = parse_spec(
             "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*.tsx\"]\n  exclude: []\n---\n",
         );
@@ -1235,9 +1351,7 @@ mod tests {
         let path = tmp.path().join("big.txt");
         let big = "x".repeat((MAX_FILE_BYTES + 1024) as usize);
         write(&path, &big);
-        let subject = Subject::File(crate::subject::file::File {
-            root: path,
-        });
+        let subject = Subject::File(crate::subject::file::File { root: path });
         let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
         let err = gather(&subject, &spec, &[]).unwrap_err();
         assert!(err.to_string().contains("over the"), "got: {err}");
@@ -1248,9 +1362,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("bin.dat");
         std::fs::write(&path, [0xff, 0xfe, 0x00, 0x01]).unwrap();
-        let subject = Subject::File(crate::subject::file::File {
-            root: path,
-        });
+        let subject = Subject::File(crate::subject::file::File { root: path });
         let spec = parse_spec("---\nname: t\nmode: trusted\nkind: prompt\n---\n");
         let err = gather(&subject, &spec, &[]).unwrap_err();
         let msg = format!("{err:#}");
@@ -1302,10 +1414,8 @@ mod tests {
         assert!(err.to_string().contains("no files matched"));
     }
 
-    const OPEN_SCOPE_TRUSTED: &str =
-        "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n";
-    const OPEN_SCOPE_UNTRUSTED: &str =
-        "---\nname: t\nmode: untrusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n";
+    const OPEN_SCOPE_TRUSTED: &str = "---\nname: t\nmode: trusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n";
+    const OPEN_SCOPE_UNTRUSTED: &str = "---\nname: t\nmode: untrusted\nkind: prompt\ndefault_scope:\n  include: [\"**/*\"]\n  exclude: []\n---\n";
 
     fn paths(res: &GatherResult) -> Vec<String> {
         res.chunks[0].files.iter().map(|f| f.path.clone()).collect()
@@ -1324,22 +1434,43 @@ mod tests {
     fn trusted_mode_honours_subject_ignore_files() {
         let tmp = tempdir().unwrap();
         write_ignore_fixture(tmp.path());
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+        )
+        .unwrap();
         let p = paths(&res);
         assert!(p.contains(&"src/lib.rs".to_string()));
-        assert!(!p.contains(&"hidden_by_gitignore.rs".to_string()), "got: {p:?}");
-        assert!(!p.contains(&"hidden_by_dot_ignore.rs".to_string()), "got: {p:?}");
+        assert!(
+            !p.contains(&"hidden_by_gitignore.rs".to_string()),
+            "got: {p:?}"
+        );
+        assert!(
+            !p.contains(&"hidden_by_dot_ignore.rs".to_string()),
+            "got: {p:?}"
+        );
     }
 
     #[test]
     fn untrusted_mode_bypasses_subject_ignore_files_but_skips_dot_git() {
         let tmp = tempdir().unwrap();
         write_ignore_fixture(tmp.path());
-        let res =
-            gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_UNTRUSTED), &[]).unwrap();
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_UNTRUSTED),
+            &[],
+        )
+        .unwrap();
         let p = paths(&res);
-        assert!(p.contains(&"hidden_by_gitignore.rs".to_string()), "got: {p:?}");
-        assert!(p.contains(&"hidden_by_dot_ignore.rs".to_string()), "got: {p:?}");
+        assert!(
+            p.contains(&"hidden_by_gitignore.rs".to_string()),
+            "got: {p:?}"
+        );
+        assert!(
+            p.contains(&"hidden_by_dot_ignore.rs".to_string()),
+            "got: {p:?}"
+        );
         assert!(p.contains(&".gitignore".to_string()), "got: {p:?}");
         assert!(!p.iter().any(|x| x.starts_with(".git/")), "got: {p:?}");
     }
@@ -1354,7 +1485,10 @@ mod tests {
         // unfiltered tree.
         let tmp = tempdir().unwrap();
         write_ignore_fixture(tmp.path());
-        let opts = GatherOptions { untrusted: true, include_secrets: false };
+        let opts = GatherOptions {
+            untrusted: true,
+            include_secrets: false,
+        };
         let res = gather_with(&make_subject(tmp.path()), &t, &[], &opts).unwrap();
         assert!(paths(&res).contains(&"hidden_by_gitignore.rs".to_string()));
     }
@@ -1362,18 +1496,46 @@ mod tests {
     #[test]
     fn secret_denylist_matches_expected_names() {
         for p in [
-            ".env", "app/.env", ".env.local", ".env.production", "certs/server.pem",
-            "tls.key", "cert.p12", "cert.pfx", "id_rsa", "home/id_rsa.pub", "id_ed25519",
-            "id_ecdsa", "id_dsa", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
-            "credentials", "gcp/credentials.json", ".aws/config", "x/.aws/credentials",
-            ".ssh/known_hosts", "android/release.keystore", "app.jks",
-            ".docker/config.json", "kubeconfig", "SERVER.PEM",
+            ".env",
+            "app/.env",
+            ".env.local",
+            ".env.production",
+            "certs/server.pem",
+            "tls.key",
+            "cert.p12",
+            "cert.pfx",
+            "id_rsa",
+            "home/id_rsa.pub",
+            "id_ed25519",
+            "id_ecdsa",
+            "id_dsa",
+            ".npmrc",
+            ".pypirc",
+            ".netrc",
+            ".git-credentials",
+            "credentials",
+            "gcp/credentials.json",
+            ".aws/config",
+            "x/.aws/credentials",
+            ".ssh/known_hosts",
+            "android/release.keystore",
+            "app.jks",
+            ".docker/config.json",
+            "kubeconfig",
+            "SERVER.PEM",
         ] {
             assert!(is_possible_secret(p), "{p} should be denylisted");
         }
         for p in [
-            ".env.example", ".env.sample", ".env.template", "src/env.rs", "config.json",
-            "docs/credentials.md", "keys.rs", "src/aws/client.rs", "environment.ts",
+            ".env.example",
+            ".env.sample",
+            ".env.template",
+            "src/env.rs",
+            "config.json",
+            "docs/credentials.md",
+            "keys.rs",
+            "src/aws/client.rs",
+            "environment.ts",
         ] {
             assert!(!is_possible_secret(p), "{p} should NOT be denylisted");
         }
@@ -1386,14 +1548,25 @@ mod tests {
         write(&tmp.path().join("src/lib.rs"), "fn x() {}");
         write(&tmp.path().join(".env"), "API_KEY=supersecret");
         write(&tmp.path().join(".env.example"), "API_KEY=changeme");
-        write(&tmp.path().join("deploy/server.pem"), "-----BEGIN PRIVATE KEY-----");
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();
+        write(
+            &tmp.path().join("deploy/server.pem"),
+            "-----BEGIN PRIVATE KEY-----",
+        );
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+        )
+        .unwrap();
         let p = paths(&res);
         assert!(p.contains(&".env.example".to_string()));
         assert!(!p.contains(&".env".to_string()));
         assert!(!p.contains(&"deploy/server.pem".to_string()));
         assert!(
-            res.chunks[0].files.iter().all(|f| !f.content.contains("supersecret")),
+            res.chunks[0]
+                .files
+                .iter()
+                .all(|f| !f.content.contains("supersecret")),
             "secret content leaked into evidence"
         );
         assert_eq!(res.stats.skipped_secret, 2);
@@ -1406,7 +1579,10 @@ mod tests {
             .collect();
         withheld.sort();
         assert_eq!(withheld, vec![".env", "deploy/server.pem"]);
-        assert_eq!(SkipReason::PossibleSecret.to_string(), "withheld: possible secret");
+        assert_eq!(
+            SkipReason::PossibleSecret.to_string(),
+            "withheld: possible secret"
+        );
     }
 
     #[test]
@@ -1414,10 +1590,17 @@ mod tests {
         let tmp = tempdir().unwrap();
         init_git(tmp.path());
         write(&tmp.path().join(".env"), "API_KEY=x");
-        let opts = GatherOptions { untrusted: false, include_secrets: true };
-        let res =
-            gather_with(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_TRUSTED), &[], &opts)
-                .unwrap();
+        let opts = GatherOptions {
+            untrusted: false,
+            include_secrets: true,
+        };
+        let res = gather_with(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+            &opts,
+        )
+        .unwrap();
         assert!(paths(&res).contains(&".env".to_string()));
         assert_eq!(res.stats.skipped_secret, 0);
     }
@@ -1439,8 +1622,17 @@ mod tests {
         init_git(tmp.path());
         // Latin-1 é (0xe9) is invalid UTF-8 but not binary.
         std::fs::write(tmp.path().join("latin1.py"), b"eval(payload) # caf\xe9\n").unwrap();
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();
-        let f = res.chunks[0].files.iter().find(|f| f.path == "latin1.py").unwrap();
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+        )
+        .unwrap();
+        let f = res.chunks[0]
+            .files
+            .iter()
+            .find(|f| f.path == "latin1.py")
+            .unwrap();
         assert!(f.content.contains("eval(payload)"));
         assert!(f.content.contains('\u{FFFD}'));
         assert_eq!(res.stats.decoded_lossily, 1);
@@ -1453,9 +1645,16 @@ mod tests {
         init_git(tmp.path());
         write(&tmp.path().join("src/lib.rs"), "fn x() {}");
         std::fs::write(tmp.path().join("blob.bin"), [b'a', 0, b'b']).unwrap();
-        write(&tmp.path().join("big.js"), &"x".repeat((MAX_FILE_BYTES + 1) as usize));
-        let res =
-            gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_UNTRUSTED), &[]).unwrap();
+        write(
+            &tmp.path().join("big.js"),
+            &"x".repeat((MAX_FILE_BYTES + 1) as usize),
+        );
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_UNTRUSTED),
+            &[],
+        )
+        .unwrap();
         assert_eq!(res.stats.skipped_binary, 1);
         assert_eq!(res.stats.skipped_too_large, 1);
         assert!(res.stats.skipped_files.contains(&SkippedFile {
@@ -1469,12 +1668,19 @@ mod tests {
         }));
         assert!(res.stats.skipped_files.contains(&SkippedFile {
             path: "big.js".into(),
-            reason: SkipReason::TooLarge { bytes: MAX_FILE_BYTES + 1 },
+            reason: SkipReason::TooLarge {
+                bytes: MAX_FILE_BYTES + 1
+            },
         }));
         let json = serde_json::to_value(&res.stats.skipped_files).unwrap();
-        assert!(json.as_array().unwrap().iter().any(|v| v["reason"] == "too_large"
-            && v["path"] == "big.js"
-            && v["bytes"] == MAX_FILE_BYTES + 1));
+        assert!(
+            json.as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["reason"] == "too_large"
+                    && v["path"] == "big.js"
+                    && v["bytes"] == MAX_FILE_BYTES + 1)
+        );
     }
 
     #[test]
@@ -1483,11 +1689,24 @@ mod tests {
         init_git(tmp.path());
         write(&tmp.path().join("src/lib.rs"), "fn x() {}");
         std::fs::write(tmp.path().join("blob.bin"), [b'a', 0, b'b']).unwrap();
-        write(&tmp.path().join("big.js"), &"x".repeat((MAX_FILE_BYTES + 1) as usize));
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();
+        write(
+            &tmp.path().join("big.js"),
+            &"x".repeat((MAX_FILE_BYTES + 1) as usize),
+        );
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+        )
+        .unwrap();
         assert_eq!(res.stats.skipped_binary, 1);
         assert_eq!(res.stats.skipped_too_large, 1);
-        let listed: Vec<&str> = res.stats.skipped_files.iter().map(|s| s.path.as_str()).collect();
+        let listed: Vec<&str> = res
+            .stats
+            .skipped_files
+            .iter()
+            .map(|s| s.path.as_str())
+            .collect();
         assert_eq!(listed, vec!["blob.bin"]);
         assert!(res.stats.coverage_partial());
     }
@@ -1501,10 +1720,17 @@ mod tests {
         write(&tmp.path().join("src/lib.rs"), "fn x() {}");
         write(&tmp.path().join("package.json"), "{}");
         // An int8 matrix: no signature, NULs throughout, > 8 MiB.
-        let blob: Vec<u8> = (0..(MAX_TOTAL_BYTES + 1024)).map(|i| (i % 251) as u8).collect();
+        let blob: Vec<u8> = (0..(MAX_TOTAL_BYTES + 1024))
+            .map(|i| (i % 251) as u8)
+            .collect();
         std::fs::create_dir_all(tmp.path().join("models")).unwrap();
         std::fs::write(tmp.path().join("models/matrix.bin"), &blob).unwrap();
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_UNTRUSTED), &[]).unwrap();
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_UNTRUSTED),
+            &[],
+        )
+        .unwrap();
         let mut p = paths(&res);
         p.sort();
         assert_eq!(p, vec!["package.json", "src/lib.rs"]);
@@ -1535,9 +1761,16 @@ mod tests {
         init_git(tmp.path());
         write(&tmp.path().join("a.rs"), &"x".repeat(60));
         for i in 0..5 {
-            std::fs::write(tmp.path().join(format!("w{i}.bin")), [7u8, 0, 9].repeat(100)).unwrap();
+            std::fs::write(
+                tmp.path().join(format!("w{i}.bin")),
+                [7u8, 0, 9].repeat(100),
+            )
+            .unwrap();
         }
-        let limits = Limits { max_total_bytes: 100, ..DEFAULT_LIMITS };
+        let limits = Limits {
+            max_total_bytes: 100,
+            ..DEFAULT_LIMITS
+        };
         let res = gather_inner(
             &make_subject(tmp.path()),
             &parse_spec(OPEN_SCOPE_TRUSTED),
@@ -1555,11 +1788,31 @@ mod tests {
         let mut tar = vec![0u8; 512];
         tar[257..262].copy_from_slice(b"ustar");
         for (head, kind, format) in [
-            (b"\x7fELF\x02\x01\x01\0".to_vec(), BinaryKind::Executable, Some("ELF")),
-            (vec![0xcf, 0xfa, 0xed, 0xfe, 0, 0], BinaryKind::Executable, Some("Mach-O")),
-            (b"MZ\x90\0".to_vec(), BinaryKind::Executable, Some("PE (Windows executable)")),
-            (b"\0asm\x01\0".to_vec(), BinaryKind::Executable, Some("WebAssembly")),
-            (b"PK\x03\x04\x14\0".to_vec(), BinaryKind::Archive, Some("zip")),
+            (
+                b"\x7fELF\x02\x01\x01\0".to_vec(),
+                BinaryKind::Executable,
+                Some("ELF"),
+            ),
+            (
+                vec![0xcf, 0xfa, 0xed, 0xfe, 0, 0],
+                BinaryKind::Executable,
+                Some("Mach-O"),
+            ),
+            (
+                b"MZ\x90\0".to_vec(),
+                BinaryKind::Executable,
+                Some("PE (Windows executable)"),
+            ),
+            (
+                b"\0asm\x01\0".to_vec(),
+                BinaryKind::Executable,
+                Some("WebAssembly"),
+            ),
+            (
+                b"PK\x03\x04\x14\0".to_vec(),
+                BinaryKind::Archive,
+                Some("zip"),
+            ),
             (vec![0x1f, 0x8b, 8, 0], BinaryKind::Archive, Some("gzip")),
             (tar, BinaryKind::Archive, Some("tar")),
             (vec![0x89, b'P', b'N', b'G', 0], BinaryKind::Data, None),
@@ -1572,14 +1825,31 @@ mod tests {
         init_git(tmp.path());
         write(&tmp.path().join("src/lib.rs"), "fn x() {}");
         std::fs::create_dir_all(tmp.path().join("tools")).unwrap();
-        std::fs::write(tmp.path().join("tools/helper"), b"\x7fELF\x02\x01\x01\0\0\0").unwrap();
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();
+        std::fs::write(
+            tmp.path().join("tools/helper"),
+            b"\x7fELF\x02\x01\x01\0\0\0",
+        )
+        .unwrap();
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+        )
+        .unwrap();
         let entry = res.stats.binary_manifest().next().unwrap();
         assert!(matches!(
             entry.reason,
-            SkipReason::Binary { kind: BinaryKind::Executable, format: Some("ELF"), .. }
+            SkipReason::Binary {
+                kind: BinaryKind::Executable,
+                format: Some("ELF"),
+                ..
+            }
         ));
-        assert!(entry.reason.to_string().contains("executable: ELF"), "{}", entry.reason);
+        assert!(
+            entry.reason.to_string().contains("executable: ELF"),
+            "{}",
+            entry.reason
+        );
     }
 
     /// The security constraint: a NUL can't move readable code out of the
@@ -1595,12 +1865,23 @@ mod tests {
         let utf16: Vec<u8> = code.encode_utf16().flat_map(u16::to_le_bytes).collect();
         std::fs::write(tmp.path().join("evil16.ps1"), &utf16).unwrap();
         // Text head, binary tail past the sniff window: still text.
-        let mut tail = "exec(payload)\n".repeat(BINARY_SNIFF_BYTES / 10).into_bytes();
+        let mut tail = "exec(payload)\n"
+            .repeat(BINARY_SNIFF_BYTES / 10)
+            .into_bytes();
         tail.extend((0..4096u32).map(|i| (i % 7) as u8));
         std::fs::write(tmp.path().join("installer.sh"), &tail).unwrap();
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_UNTRUSTED), &[]).unwrap();
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_UNTRUSTED),
+            &[],
+        )
+        .unwrap();
         assert_eq!(res.stats.skipped_binary, 0, "{:?}", res.stats.skipped_files);
-        let f = res.chunks[0].files.iter().find(|f| f.path == "evil.js").unwrap();
+        let f = res.chunks[0]
+            .files
+            .iter()
+            .find(|f| f.path == "evil.js")
+            .unwrap();
         assert!(f.content.starts_with('\u{FFFD}'));
         assert!(f.content.contains("child_process"));
         assert!(paths(&res).contains(&"evil16.ps1".to_string()));
@@ -1616,7 +1897,12 @@ mod tests {
         let mut zip = b"PK\x03\x04".to_vec();
         zip.extend((0..MAX_FILE_BYTES as u32 + 10).map(|i| (i % 13) as u8));
         std::fs::write(tmp.path().join("vendor.jar"), &zip).unwrap();
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+        )
+        .unwrap();
         assert_eq!(res.stats.skipped_too_large, 0);
         let entry = res.stats.binary_manifest().next().unwrap();
         assert_eq!(
@@ -1633,14 +1919,24 @@ mod tests {
     #[test]
     fn data_binaries_cant_crowd_other_skips_off_the_list() {
         let mut stats = GatherStats::default();
-        let data = || SkipReason::Binary { bytes: 1, sha256: None, kind: BinaryKind::Data, format: None };
+        let data = || SkipReason::Binary {
+            bytes: 1,
+            sha256: None,
+            kind: BinaryKind::Data,
+            format: None,
+        };
         for i in 0..SKIP_LIST_CAP + 5 {
             stats.record_skip(format!("d{i}.bin"), data());
         }
         stats.record_skip(".env".into(), SkipReason::PossibleSecret);
         stats.record_skip(
             "x".into(),
-            SkipReason::Binary { bytes: 1, sha256: None, kind: BinaryKind::Executable, format: Some("ELF") },
+            SkipReason::Binary {
+                bytes: 1,
+                sha256: None,
+                kind: BinaryKind::Executable,
+                format: Some("ELF"),
+            },
         );
         assert_eq!(stats.skipped_files.len(), SKIP_LIST_CAP + 2);
         assert!(stats.skipped_files.iter().any(|s| s.path == ".env"));
@@ -1656,19 +1952,31 @@ mod tests {
         write(&tmp.path().join("bun.lock"), "");
         write(&tmp.path().join("docs/b.md"), "");
         let spec = parse_spec(OPEN_SCOPE_TRUSTED);
-        let scopes = ["src/**".to_string(), " package.json".to_string(), "bun.lock".to_string()];
+        let scopes = [
+            "src/**".to_string(),
+            " package.json".to_string(),
+            "bun.lock".to_string(),
+        ];
         let res = gather(&make_subject(tmp.path()), &spec, &scopes).unwrap();
         let mut p = paths(&res);
         p.sort();
         assert_eq!(p, vec!["bun.lock", "package.json", "src/a.rs"]);
 
-        let err = gather(&make_subject(tmp.path()), &spec, &["src/**".into(), "".into()]).unwrap_err();
+        let err = gather(
+            &make_subject(tmp.path()),
+            &spec,
+            &["src/**".into(), "".into()],
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("empty --scope"), "got: {err}");
     }
 
     #[test]
     fn merge_dedups_skipped_files() {
-        let mut a = GatherStats { skipped_secret: 1, ..GatherStats::default() };
+        let mut a = GatherStats {
+            skipped_secret: 1,
+            ..GatherStats::default()
+        };
         a.record_skip(".env".into(), SkipReason::PossibleSecret);
         let mut b = GatherStats::default();
         b.merge(&a);
@@ -1684,7 +1992,10 @@ mod tests {
         for i in 0..4 {
             write(&tmp.path().join(format!("f{i}.rs")), "x");
         }
-        let limits = Limits { max_total_files: 3, ..DEFAULT_LIMITS };
+        let limits = Limits {
+            max_total_files: 3,
+            ..DEFAULT_LIMITS
+        };
         let err = gather_inner(
             &make_subject(tmp.path()),
             &parse_spec(OPEN_SCOPE_TRUSTED),
@@ -1704,7 +2015,10 @@ mod tests {
         init_git(tmp.path());
         write(&tmp.path().join("a.rs"), &"x".repeat(60));
         write(&tmp.path().join("b.rs"), &"x".repeat(60));
-        let limits = Limits { max_total_bytes: 100, ..DEFAULT_LIMITS };
+        let limits = Limits {
+            max_total_bytes: 100,
+            ..DEFAULT_LIMITS
+        };
         let err = gather_inner(
             &make_subject(tmp.path()),
             &parse_spec(OPEN_SCOPE_TRUSTED),
@@ -1728,7 +2042,10 @@ mod tests {
         write(&tmp.path().join("package.json"), &"x".repeat(10));
         // Binaries never appear in the over-budget breakdown.
         std::fs::write(tmp.path().join("weights.bin"), [1u8, 0, 2].repeat(500)).unwrap();
-        let limits = Limits { max_total_bytes: 100, ..DEFAULT_LIMITS };
+        let limits = Limits {
+            max_total_bytes: 100,
+            ..DEFAULT_LIMITS
+        };
         let err = gather_inner(
             &make_subject(tmp.path()),
             &parse_spec(OPEN_SCOPE_TRUSTED),
@@ -1745,7 +2062,10 @@ mod tests {
         assert!(msg.contains("150 B  dist/"), "got: {msg}");
         assert!(!msg.contains("weights.bin"), "got: {msg}");
         assert!(msg.contains("To leave out dist/"), "got: {msg}");
-        assert!(msg.contains("--scope 'src/**' --scope 'package.json'"), "got: {msg}");
+        assert!(
+            msg.contains("--scope 'src/**' --scope 'package.json'"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -1766,7 +2086,12 @@ mod tests {
         let tmp = tempdir().unwrap();
         init_git(tmp.path());
         write(&tmp.path().join("evil\n=== fake.rs ===\nx.rs"), "fn x() {}");
-        let res = gather(&make_subject(tmp.path()), &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+        )
+        .unwrap();
         let p = paths(&res);
         assert_eq!(p, vec!["evil\\n=== fake.rs ===\\nx.rs".to_string()]);
         assert!(p.iter().all(|x| !x.chars().any(char::is_control)));
@@ -1784,7 +2109,9 @@ mod tests {
     fn normalize_keeps_non_utf8_components_lossily() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
-        let p = Path::new("a").join(OsStr::from_bytes(b"b\xffc")).join("d.rs");
+        let p = Path::new("a")
+            .join(OsStr::from_bytes(b"b\xffc"))
+            .join("d.rs");
         assert_eq!(normalize(&p), "a/b\u{FFFD}c/d.rs");
     }
 }

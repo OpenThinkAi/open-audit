@@ -152,7 +152,10 @@ mod tests {
         let msg = err.to_string();
         let root = tmp.path().canonicalize().unwrap();
         assert!(msg.contains("inside a larger git repository"), "got: {msg}");
-        assert!(msg.contains(&format!("oaudit repo {}", root.display())), "got: {msg}");
+        assert!(
+            msg.contains(&format!("oaudit repo {}", root.display())),
+            "got: {msg}"
+        );
         assert!(msg.contains("oaudit file"), "got: {msg}");
     }
 
@@ -166,6 +169,9 @@ mod tests {
         std::fs::create_dir(&inner).unwrap();
         init_git_repo(&inner);
         let repo = open(inner.to_str().unwrap()).await.unwrap();
-        assert_eq!(repo.root.canonicalize().unwrap(), inner.canonicalize().unwrap());
+        assert_eq!(
+            repo.root.canonicalize().unwrap(),
+            inner.canonicalize().unwrap()
+        );
     }
 }
