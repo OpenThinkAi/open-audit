@@ -5,6 +5,13 @@ edition = "2024"
 description = "CLI for auditing codebases against composable spec docs."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/OpenThinkAi/open-audit"
+# Releases ship only via GitHub Releases and npm (see RELEASING.md), never
+# crates.io, so a stray `cargo publish` can't ship an unreviewed build.
+publish = false
+
+# `publish = false` would make dist skip this package; opt it back in.
+[package.metadata.dist]
+dist = true
 
 [[bin]]
 name = "oaudit"
@@ -67,7 +74,6 @@ thiserror = "2"
 # serde + formats
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
 gray_matter = "0.3"
 
 # fs / repo walking

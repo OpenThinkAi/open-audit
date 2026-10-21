@@ -13,6 +13,7 @@ use crate::evidence::{self, GatherOptions, GatherStats};
 use crate::finding::{AuditReport, Finding};
 use crate::spec::{Mode, Spec, SpecSource};
 use crate::subject::Subject;
+use crate::text::is_invisible_format;
 use anyhow::{Context, Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
@@ -394,7 +395,7 @@ fn escape_attr(s: &str) -> String {
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '&' => out.push_str("&amp;"),
-            c if c.is_control() => out.extend(c.escape_unicode()),
+            c if c.is_control() || is_invisible_format(c) => out.extend(c.escape_unicode()),
             c => out.push(c),
         }
     }

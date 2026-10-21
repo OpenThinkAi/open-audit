@@ -16,6 +16,7 @@ mod resolve;
 mod run;
 mod spec;
 mod subject;
+mod text;
 mod update;
 
 #[tokio::main]
