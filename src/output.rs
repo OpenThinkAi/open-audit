@@ -3,6 +3,7 @@
 use crate::cli::Format;
 use crate::evidence::GatherStats;
 use crate::finding::{AuditReport, Finding, Severity};
+use crate::text::is_invisible_format;
 use anyhow::Result;
 use console::{Style, style};
 
@@ -169,14 +170,16 @@ fn print_finding(f: &Finding) {
     println!();
 }
 
-/// Strip control characters (keeping `\n` and `\t`) from text that came
-/// from the model or the subject. Otherwise an audited file can smuggle
-/// escape sequences through a finding: OSC 52 clipboard writes, cursor
-/// moves that paint over a CRITICAL, fake hyperlinks. JSON output doesn't
-/// need this; serde escapes control characters.
+/// Strip control characters (keeping `\n` and `\t`) and invisible
+/// bidi/zero-width characters from text that came from the model or the
+/// subject. Otherwise an audited file can smuggle escape sequences through
+/// a finding (OSC 52 clipboard writes, cursor moves that paint over a
+/// CRITICAL, fake hyperlinks) or reorder a displayed path with a bidi
+/// override. JSON output doesn't need this; serde escapes control
+/// characters and consumers render it themselves.
 fn clean(s: &str) -> String {
     s.chars()
-        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .filter(|&c| (!c.is_control() || c == '\n' || c == '\t') && !is_invisible_format(c))
         .collect()
 }
 
@@ -260,6 +263,13 @@ mod tests {
     fn clean_strips_escape_sequences_but_keeps_layout() {
         let hostile = "ok\u{1b}]52;c;cm0gLXJmIH4=\u{7}\u{1b}[2Aline\n\tnext\r\u{9b}31m";
         assert_eq!(clean(hostile), "ok]52;c;cm0gLXJmIH4=[2Aline\n\tnext31m");
+    }
+
+    #[test]
+    fn clean_strips_bidi_and_zero_width() {
+        let hostile = "src/\u{202E}sr.exe\u{202C}\u{200B}\u{2066}x\u{2069}\u{FEFF}.rs";
+        assert_eq!(clean(hostile), "src/sr.exex.rs");
+        assert_eq!(clean("café ü"), "café ü");
     }
 
     fn finding(severity: Severity) -> Finding {

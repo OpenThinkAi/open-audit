@@ -48,6 +48,7 @@ use std::path::Path;
 
 use crate::spec::{Mode, Spec};
 use crate::subject::Subject;
+use crate::text::is_invisible_format;
 
 /// Files larger than this are skipped (counted in `GatherStats`).
 /// 256 KB covers ~95% of source files; bigger files are usually generated
@@ -707,6 +708,12 @@ const SECRET_FILE_NAMES: &[&str] = &[
     "credentials",
     "credentials.json",
     "kubeconfig",
+    ".pgpass",
+    ".htpasswd",
+    ".vault-token",
+    ".terraformrc",
+    "terraform.rc",
+    "credentials.tfrc.json",
 ];
 
 /// File-name prefixes (lowercased) withheld: SSH private keys. Matches
@@ -714,11 +721,33 @@ const SECRET_FILE_NAMES: &[&str] = &[
 /// audit needs.
 const SECRET_NAME_PREFIXES: &[&str] = &["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"];
 
-/// Extensions (lowercased, with dot) withheld: key and keystore formats.
-const SECRET_EXTENSIONS: &[&str] = &[".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"];
+/// Extensions (lowercased, with dot) withheld: key and keystore formats,
+/// password vaults, VPN profiles, and Terraform state (which routinely
+/// holds plaintext passwords and keys).
+const SECRET_EXTENSIONS: &[&str] = &[
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".keystore",
+    ".jks",
+    ".tfstate",
+    ".tfstate.backup",
+    ".ovpn",
+    ".kdbx",
+    ".gpg",
+];
+
+/// `(parent dir, file name)` pairs (lowercased) withheld: generic names
+/// that only hold credentials inside a particular tool's directory.
+const SECRET_FILES_IN_DIR: &[(&str, &str)] = &[
+    (".docker", "config.json"),
+    (".kube", "config"),
+    ("gh", "hosts.yml"),
+];
 
 /// Directories whose entire contents are withheld, at any depth.
-const SECRET_DIRS: &[&str] = &[".aws", ".ssh"];
+const SECRET_DIRS: &[&str] = &[".aws", ".ssh", ".gnupg"];
 
 /// `.env.<suffix>` variants that are conventionally committed templates
 /// with placeholder values, and so are allowed through.
@@ -739,7 +768,14 @@ fn is_possible_secret(rel_path: &str) -> bool {
     {
         return true;
     }
-    if name == "config.json" && dirs.last().is_some_and(|d| d.eq_ignore_ascii_case(".docker")) {
+    if let Some(parent) = dirs.last()
+        && SECRET_FILES_IN_DIR
+            .iter()
+            .any(|(d, n)| name == *n && parent.eq_ignore_ascii_case(d))
+    {
+        return true;
+    }
+    if name.starts_with("service-account") && name.ends_with(".json") {
         return true;
     }
     if let Some(suffix) = name.strip_prefix(".env.") {
@@ -1015,18 +1051,21 @@ fn normalize(path: &Path) -> String {
         .join("/")
 }
 
-/// Escape control characters in a label that will be embedded in the
-/// prompt or the report. A filename containing `\n=== fake.rs ===\n`
-/// could otherwise forge a file delimiter in the prompt; escaping keeps
-/// the label on one line and visibly odd.
+/// Escape control characters and invisible bidi/zero-width characters in
+/// a label that will be embedded in the prompt or the report. A filename
+/// containing `\n=== fake.rs ===\n` could otherwise forge a file delimiter
+/// in the prompt, and one containing U+202E could display as a different
+/// name; escaping keeps the label on one line and visibly odd.
 fn sanitize_label(label: &str) -> String {
-    if !label.chars().any(char::is_control) {
+    if !label.chars().any(|c| c.is_control() || is_invisible_format(c)) {
         return label.to_string();
     }
     let mut out = String::with_capacity(label.len() + 8);
     for c in label.chars() {
         if c.is_control() {
             out.extend(c.escape_default());
+        } else if is_invisible_format(c) {
+            out.extend(c.escape_unicode());
         } else {
             out.push(c);
         }
@@ -1367,13 +1406,20 @@ mod tests {
             "id_ecdsa", "id_dsa", ".npmrc", ".pypirc", ".netrc", ".git-credentials",
             "credentials", "gcp/credentials.json", ".aws/config", "x/.aws/credentials",
             ".ssh/known_hosts", "android/release.keystore", "app.jks",
-            ".docker/config.json", "kubeconfig", "SERVER.PEM",
+            ".docker/config.json", "kubeconfig", "SERVER.PEM", ".kube/config",
+            "home/.kube/config", "terraform.tfstate", "infra/terraform.tfstate.backup",
+            "prod.tfstate", ".pgpass", "web/.htpasswd", ".vault-token", ".terraformrc",
+            "terraform.rc", ".terraform.d/credentials.tfrc.json", ".config/gh/hosts.yml",
+            ".gnupg/private-keys-v1.d/abc.key", "x/.gnupg/pubring.kbx", "client.ovpn",
+            "vault.kdbx", "secrets.gpg", "service-account.json", "gcp/service-account-prod.json",
         ] {
             assert!(is_possible_secret(p), "{p} should be denylisted");
         }
         for p in [
             ".env.example", ".env.sample", ".env.template", "src/env.rs", "config.json",
             "docs/credentials.md", "keys.rs", "src/aws/client.rs", "environment.ts",
+            "config", "src/config", "kube/config.go", "ansible/hosts.yml", "gh/hosts.yaml",
+            "main.tf", "terraform/variables.tf", "docs/service-account.md",
         ] {
             assert!(!is_possible_secret(p), "{p} should NOT be denylisted");
         }
@@ -1777,6 +1823,15 @@ mod tests {
         assert_eq!(sanitize_label("src/lib.rs"), "src/lib.rs");
         assert_eq!(sanitize_label("a\rb\tc\u{1b}"), "a\\rb\\tc\\u{1b}");
         assert_eq!(sanitize_label("café/ü.rs"), "café/ü.rs");
+    }
+
+    #[test]
+    fn sanitize_label_escapes_bidi_and_zero_width() {
+        assert_eq!(
+            sanitize_label("src/\u{202E}sr.exe\u{200B}.rs"),
+            "src/\\u{202e}sr.exe\\u{200b}.rs"
+        );
+        assert_eq!(sanitize_label("a\u{2066}b\u{FEFF}"), "a\\u{2066}b\\u{feff}");
     }
 
     #[cfg(unix)]

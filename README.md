@@ -217,8 +217,9 @@ content, …), `archive` (zip/jar, gzip, tar, 7z, …) or `data`, with
   `--against` sends the files again, so three specs cost three times the
   usage.
 - Files that look like secrets (`.env*` except `.env.example`-style
-  templates, private keys, `.npmrc`, `.netrc`, cloud credentials, …) are
-  withheld by default and listed as skipped. This is a filename heuristic:
+  templates, private keys, `.npmrc`, `.netrc`, `.pgpass`, cloud and
+  Kubernetes credentials, Terraform state, `gh` and Vault tokens, `.gnupg/`,
+  …) are withheld by default and listed as skipped. This is a filename heuristic:
   secrets inside ordinary source files are still sent.
 - The `claude` process runs as a plain text completion: **no tools, no MCP
   servers, no hooks, no user or project settings**, in an empty temporary
