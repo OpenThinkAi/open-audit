@@ -70,7 +70,7 @@ pub async fn render_spec(markdown: &str, title: Option<&str>) -> Result<()> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit()) // ui-leaf chatter goes through to user terminal
-        .kill_on_drop(true) // any early return → no orphaned dev server
+        .kill_on_drop(true)        // any early return → no orphaned dev server
         .spawn()
         .with_context(|| format!("spawning `node {}`", bridge.display()))?;
 
@@ -134,10 +134,7 @@ mod tests {
     fn request_serializes_with_data_and_title() {
         let req = BridgeRequest {
             view: "spec",
-            data: BridgeData {
-                markdown: "# Hi",
-                title: Some("builtin: trusted/security"),
-            },
+            data: BridgeData { markdown: "# Hi", title: Some("builtin: trusted/security") },
             title: Some("builtin: trusted/security"),
         };
         let json = serde_json::to_string(&req).unwrap();

@@ -87,11 +87,7 @@ pub fn parse(text: &str, source: SpecSource) -> Result<Spec> {
         );
     };
 
-    Ok(Spec {
-        meta,
-        body: parsed.content,
-        source,
-    })
+    Ok(Spec { meta, body: parsed.content, source })
 }
 
 fn source_context(source: &SpecSource) -> String {
@@ -120,11 +116,8 @@ mod tests {
 
     #[test]
     fn kind_is_optional_and_defaults_to_prompt() {
-        let spec = parse(
-            "---\nname: t\nmode: untrusted\n---\nbody\n",
-            SpecSource::Builtin("t"),
-        )
-        .unwrap();
+        let spec = parse("---\nname: t\nmode: untrusted\n---\nbody\n", SpecSource::Builtin("t"))
+            .unwrap();
         assert_eq!(spec.meta.kind, Kind::Prompt);
     }
 
@@ -165,10 +158,7 @@ mod tests {
         )
         .unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("custom/auditor.md"),
-            "expected path in error, got: {msg}"
-        );
+        assert!(msg.contains("custom/auditor.md"), "expected path in error, got: {msg}");
         assert!(msg.contains("missing YAML frontmatter"));
     }
 
@@ -187,11 +177,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("failed to parse builtin {}: {e:#}", b.catalog_path));
             // catalog_path = "<mode>/<name>"; meta.mode and meta.name should agree.
             let (mode_seg, name_seg) = b.catalog_path.split_once('/').unwrap();
-            assert_eq!(
-                spec.meta.name, name_seg,
-                "name mismatch in {}",
-                b.catalog_path
-            );
+            assert_eq!(spec.meta.name, name_seg, "name mismatch in {}", b.catalog_path);
             let mode_str = match spec.meta.mode {
                 Mode::Trusted => "trusted",
                 Mode::Untrusted => "untrusted",

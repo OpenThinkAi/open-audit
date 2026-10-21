@@ -46,8 +46,9 @@ back within two weeks, follow up on the same report.
   oaudit gives it and return text.
 - **The subject can't choose its own auditor.** When you run oaudit from
   inside the thing being audited and any spec in the run is untrusted, all
-  of its `.oaudit/auditors/` overrides are ignored, and subject files are fenced with a random per-run
-  marker so their content can't impersonate oaudit's instructions.
+  of its `.oaudit/auditors/` overrides are ignored, and subject files are
+  fenced with a random per-run marker so their content can't impersonate
+  oaudit's instructions.
 - **Results are LLM judgments, not guarantees.** Findings can be wrong, and
   runs vary. A clean result is not proof that the code is safe. Audited
   content can try to prompt-inject the auditor into a clean verdict; that

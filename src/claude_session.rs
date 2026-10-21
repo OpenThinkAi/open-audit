@@ -233,10 +233,9 @@ async fn read_until_result<R: AsyncRead + Unpin>(stdout: R) -> Result<Reply> {
             {
                 safety_stopped = true;
             }
-            StreamEvent::User {
-                is_synthetic: true,
-                message,
-            } if mentions_safety_stop(&message.to_string()) => {
+            StreamEvent::User { is_synthetic: true, message }
+                if mentions_safety_stop(&message.to_string()) =>
+            {
                 safety_stopped = true;
             }
             StreamEvent::Result(r) => {
@@ -268,10 +267,7 @@ async fn read_until_result<R: AsyncRead + Unpin>(stdout: R) -> Result<Reply> {
                         "claude returned success but no text. The spec may have produced an empty response — re-run with a narrower scope or a different spec to debug."
                     );
                 }
-                return Ok(Reply {
-                    text,
-                    safety_stopped,
-                });
+                return Ok(Reply { text, safety_stopped });
             }
             _ => {}
         }
@@ -352,8 +348,7 @@ mod tests {
     // Shapes captured from claude 2.1.283 when a reply was cut off.
     const STOP_NOTICE: &str = r#"{"type":"system","subtype":"informational","content":"Fable 5.1's safeguards stopped the response above · continuing once with that noted","level":"notice"}"#;
     const STOP_RETRY: &str = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Your response above was stopped by a safety classifier — this is not a tool or API error."}]},"isSynthetic":true}"#;
-    const EMPTY_RESULT: &str =
-        r#"{"type":"result","subtype":"success","is_error":false,"result":""}"#;
+    const EMPTY_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":false,"result":""}"#;
 
     async fn read_lines(lines: &[&str]) -> Result<Reply> {
         let stream = lines.join("\n") + "\n";
@@ -385,9 +380,7 @@ mod tests {
     #[tokio::test]
     async fn clean_reply_is_not_marked_stopped() {
         let ok = r#"{"type":"result","subtype":"success","is_error":false,"result":"[]"}"#;
-        let reply = read_lines(&[r#"{"type":"system","subtype":"init"}"#, ok])
-            .await
-            .unwrap();
+        let reply = read_lines(&[r#"{"type":"system","subtype":"init"}"#, ok]).await.unwrap();
         assert!(!reply.safety_stopped);
         assert_eq!(reply.text, "[]");
     }
@@ -398,11 +391,7 @@ mod tests {
         assert!(pairs.contains(&["--tools", ""].as_slice()));
         assert!(pairs.contains(&["--setting-sources", ""].as_slice()));
         assert!(pairs.contains(&["--permission-prompts", "none"].as_slice()));
-        for flag in [
-            "--restricted",
-            "--strict-mcp-config",
-            "--disable-slash-commands",
-        ] {
+        for flag in ["--restricted", "--strict-mcp-config", "--disable-slash-commands"] {
             assert!(ISOLATION_ARGS.contains(&flag), "missing {flag}");
         }
     }
@@ -425,8 +414,7 @@ mod tests {
 
     #[test]
     fn result_event_deserializes() {
-        let line =
-            r#"{"type":"result","subtype":"success","is_error":false,"result":"hello world"}"#;
+        let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"hello world"}"#;
         let event: StreamEvent = serde_json::from_str(line).unwrap();
         match event {
             StreamEvent::Result(r) => {
@@ -460,10 +448,7 @@ mod tests {
     fn known_subtypes_get_actionable_messages() {
         let msg = explain_failure_subtype("error_max_turns", true);
         assert!(msg.contains("turn limit"), "got: {msg}");
-        assert!(
-            msg.contains("--scope") || msg.contains("split"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("--scope") || msg.contains("split"), "got: {msg}");
 
         let msg = explain_failure_subtype("error_during_execution", true);
         assert!(msg.contains("error during execution"), "got: {msg}");
