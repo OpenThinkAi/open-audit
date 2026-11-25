@@ -34,7 +34,10 @@
 //! `GitMetadata` (its hooks and config can run code on the next git
 //! command, and a nested `.git` can hide code other files load), except
 //! the working tree's own top-level `.git` of a `repo` subject, and each
-//! symlink is listed as `Symlink` with its target.
+//! symlink is listed as `Symlink` with its target. Like every other skip,
+//! an entry is listed only when its own path is in scope: a `.git` under
+//! an excluded `node_modules/**` isn't, and neither is a `.git` or a
+//! directory symlink under a file-shaped scope such as `**/*.js`.
 //!
 //! Secrets. A default denylist (`.env`, private keys, credential files —
 //! see `is_possible_secret`) is applied in ALL modes: those files are
@@ -54,7 +57,8 @@ use anyhow::{Context, Result, bail};
 use glob::Pattern;
 use serde::Serialize;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::spec::{Mode, Spec};
 use crate::subject::Subject;
@@ -181,8 +185,8 @@ pub(crate) struct GatherStats {
     pub decoded_lossily: u32,
     /// Per-path skip report. Always carries `PossibleSecret` and `Binary`
     /// entries (the binary manifest); carries `TooLarge` / `Unreadable` /
-    /// `GitMetadata` / `Symlink` entries only in untrusted mode. Capped at `SKIP_LIST_CAP` per
-    /// `ListClass`.
+    /// `GitMetadata` / `Symlink` entries only in untrusted mode. Capped at
+    /// `SKIP_LIST_CAP` per `ListClass`.
     pub skipped_files: Vec<SkippedFile>,
     /// Entries in `skipped_files` per `ListClass`, for the per-class cap.
     listed: [usize; ListClass::COUNT],
@@ -222,12 +226,7 @@ impl GatherStats {
 
     /// True when anything in scope was not shown to the model.
     pub(crate) fn coverage_partial(&self) -> bool {
-        self.skipped_too_large > 0
-            || self.skipped_binary > 0
-            || self.skipped_io_error > 0
-            || self.skipped_secret > 0
-            || self.skipped_git_metadata > 0
-            || self.skipped_symlink > 0
+        self.skipped_total() > 0
     }
 
     /// Every skipped entry, whether or not it made the capped list.
@@ -343,9 +342,7 @@ impl std::fmt::Display for SkipReason {
             }
             SkipReason::Unreadable { error } => write!(f, "unreadable: {error}"),
             SkipReason::PossibleSecret => f.write_str("withheld: possible secret"),
-            SkipReason::GitMetadata => {
-                f.write_str("git metadata, not read: hooks and config can run code on git commands")
-            }
+            SkipReason::GitMetadata => f.write_str("git metadata, not read"),
             SkipReason::Symlink { target } => write!(f, "symlink to {target}, not followed"),
         }
     }
@@ -493,7 +490,7 @@ fn gather_inner(
     // a `.git` the subject ships can carry hooks or hide loaded code. The
     // one exemption is a repo subject's own top-level `.git`, which every
     // clone has.
-    let pruned_git: std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>> = Default::default();
+    let pruned_git: Arc<Mutex<Vec<PathBuf>>> = Default::default();
     let record_git = opts.untrusted;
     let exempt_root_git = matches!(subject, Subject::Repo(_));
     let pruned = pruned_git.clone();
@@ -501,11 +498,11 @@ fn gather_inner(
         if e.depth() == 0 || e.file_name() != ".git" {
             return true;
         }
-        if record_git
-            && !(exempt_root_git && e.depth() == 1)
-            && let Ok(mut v) = pruned.lock()
-        {
-            v.push(e.path().to_path_buf());
+        if record_git && !(exempt_root_git && e.depth() == 1) {
+            pruned
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(e.path().to_path_buf());
         }
         false
     });
@@ -600,12 +597,19 @@ fn gather_inner(
         }
     }
 
-    let mut pruned_git = std::mem::take(&mut *pruned_git.lock().unwrap_or_else(|e| e.into_inner()));
+    // Same scope rule as every other skip: only entries whose own path is
+    // in scope are listed, so an excluded `node_modules/x/.git` or one
+    // outside `--scope` doesn't count as "in scope but not shown".
+    let mut pruned_git =
+        std::mem::take(&mut *pruned_git.lock().unwrap_or_else(PoisonError::into_inner));
     pruned_git.sort();
     for abs in pruned_git {
         if let Ok(rel) = abs.strip_prefix(root) {
-            stats.skipped_git_metadata += 1;
-            stats.record_skip(sanitize_label(&normalize(rel)), SkipReason::GitMetadata);
+            let rel_str = normalize(rel);
+            if scope.matches(&rel_str) {
+                stats.skipped_git_metadata += 1;
+                stats.record_skip(sanitize_label(&rel_str), SkipReason::GitMetadata);
+            }
         }
     }
 
@@ -1616,6 +1620,7 @@ mod tests {
             "#!/bin/sh\nevil\n",
         );
         write(&tmp.path().join("lib/.git/x.js"), "payload()\n");
+        write(&tmp.path().join("lib/main.js"), "module.exports = 1\n");
         write(&tmp.path().join("sub/.git"), "gitdir: ../elsewhere\n");
         let is_git = |r: &SkipReason| matches!(r, SkipReason::GitMetadata);
 
@@ -1637,6 +1642,12 @@ mod tests {
         // A repo subject: its own top-level `.git` is exempt, nested ones aren't.
         let res = gather(&make_subject(tmp.path()), &untrusted, &[]).unwrap();
         assert_eq!(skips_with(&res, is_git), vec!["lib/.git", "sub/.git"]);
+
+        // Out-of-scope `.git` entries aren't listed.
+        let scope = vec!["lib/**".to_string()];
+        let res = gather(&file_subject, &untrusted, &scope).unwrap();
+        assert_eq!(skips_with(&res, is_git), vec!["lib/.git"]);
+        assert_eq!(res.stats.skipped_git_metadata, 1);
 
         // Trusted mode keeps pruning quietly.
         let res = gather(&file_subject, &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();

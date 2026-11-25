@@ -107,7 +107,10 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             ));
         }
         if stats.skipped_git_metadata > 0 {
-            parts.push(format!("{} git metadata", stats.skipped_git_metadata));
+            parts.push(format!(
+                "{} .git entries, not read",
+                stats.skipped_git_metadata
+            ));
         }
         if stats.skipped_symlink > 0 {
             parts.push(format!(

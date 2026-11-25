@@ -101,7 +101,9 @@ the subject's own `.gitignore`/`.ignore` files are ignored (so nothing can
 be hidden from the audit), and files the model wasn't shown become a
 finding. That includes symlinks (listed with their target, never followed)
 and any `.git` directory or file the subject ships, since git hooks and
-config can run code; only a repo's own top-level `.git` is left out.
+config can run code; only a `repo` subject's own top-level `.git` isn't
+listed. As with other files, they're listed only when their path is in
+scope.
 
 ## Vetting agent skills
 
