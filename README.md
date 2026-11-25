@@ -146,10 +146,12 @@ To override a built-in for a project, save your spec as
 `.oaudit/auditors/<mode>/<name>.md` in the directory you run oaudit from;
 `oaudit list` shows which ones are overridden. Its frontmatter `mode` must
 match the directory. A subject can't supply its own auditor in an untrusted
-run: when you run oaudit from inside the thing being audited and any spec
-in `--against` is untrusted, every local override (including `trusted/*`
-ones) is ignored in favour of the built-ins, and a spec that exists only
-locally is an error.
+run: when you run oaudit from inside the thing being audited, or from a
+directory that contains it (say, auditing a skill inside a repo you just
+cloned), and any spec in `--against` is untrusted, every local override
+(including `trusted/*` ones) is ignored in favour of the built-ins, and a
+spec that exists only locally is an error. To use your own untrusted spec
+there, pass it as a file path in `--against`.
 
 ## JSON output
 
