@@ -190,11 +190,7 @@ fn unaudited_files_finding(stats: &GatherStats) -> Option<Finding> {
         .map(|s| format!("{} ({})", s.path, s.reason))
         .collect();
     // The list is capped; the counters are authoritative.
-    let total = (stats.skipped_too_large
-        + stats.skipped_binary
-        + stats.skipped_io_error
-        + stats.skipped_secret)
-        .max(skipped.len() as u32) as usize;
+    let total = stats.skipped_total().max(skipped.len() as u32) as usize;
     let more = total.saturating_sub(listing.len());
     let mut f = blank_finding(
         "oaudit-unaudited-files",
@@ -210,8 +206,9 @@ fn unaudited_files_finding(stats: &GatherStats) -> Option<Finding> {
             line: 0,
             end_line: None,
         },
-        "These files were skipped (too large, binary, unreadable, or withheld as \
-         possible secrets), so nothing in this report covers them. In untrusted \
+        "These files were skipped (too large, binary, unreadable, withheld as \
+         possible secrets, git metadata, or symlinks, which are never followed), \
+         so nothing in this report covers them. In untrusted \
          code that is a blind spot an author could use deliberately."
             .to_string(),
         "Inspect these files by hand, or re-run with --scope on them \
