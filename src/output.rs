@@ -31,6 +31,8 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
         skipped_binary: u32,
         skipped_io_error: u32,
         skipped_secret: u32,
+        skipped_git_metadata: u32,
+        skipped_symlink: u32,
         decoded_lossily: u32,
         skipped_files: &'a [crate::evidence::SkippedFile],
         io_error_samples: &'a [String],
@@ -51,6 +53,8 @@ fn emit_json(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             skipped_binary: stats.skipped_binary,
             skipped_io_error: stats.skipped_io_error,
             skipped_secret: stats.skipped_secret,
+            skipped_git_metadata: stats.skipped_git_metadata,
+            skipped_symlink: stats.skipped_symlink,
             decoded_lossily: stats.decoded_lossily,
             skipped_files: &stats.skipped_files,
             io_error_samples: &stats.io_error_samples,
@@ -100,6 +104,15 @@ fn emit_human(report: &AuditReport, stats: &GatherStats) -> Result<()> {
             parts.push(format!(
                 "{} withheld as possible secrets",
                 stats.skipped_secret
+            ));
+        }
+        if stats.skipped_git_metadata > 0 {
+            parts.push(format!("{} git metadata", stats.skipped_git_metadata));
+        }
+        if stats.skipped_symlink > 0 {
+            parts.push(format!(
+                "{} symlink(s), not followed",
+                stats.skipped_symlink
             ));
         }
         println!(

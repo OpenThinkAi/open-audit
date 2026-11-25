@@ -24,7 +24,17 @@
 //! (any selected spec is `mode: untrusted`) the subject is adversarial,
 //! and its ignore files are an attacker-controlled way to hide content
 //! from the audit, so every ignore source is disabled and the model sees
-//! everything on disk (minus `.git/` itself, always skipped).
+//! everything on disk except `.git` entries and symlinks, which are never
+//! read but are listed (see below).
+//!
+//! `.git` and symlinks. Every entry named `.git` is pruned in every mode
+//! (object storage is noise and `.git/config` can carry credentials), and
+//! symlinks are never followed (that would read outside the subject). In
+//! untrusted mode neither is silent: each pruned `.git` is listed as
+//! `GitMetadata` (its hooks and config can run code on the next git
+//! command, and a nested `.git` can hide code other files load), except
+//! the working tree's own top-level `.git` of a `repo` subject, and each
+//! symlink is listed as `Symlink` with its target.
 //!
 //! Secrets. A default denylist (`.env`, private keys, credential files —
 //! see `is_possible_secret`) is applied in ALL modes: those files are
@@ -161,12 +171,17 @@ pub(crate) struct GatherStats {
     pub io_error_samples: Vec<String>,
     /// Files withheld by the secret denylist (never read).
     pub skipped_secret: u32,
+    /// Untrusted mode only: `.git` entries pruned from the walk (see the
+    /// module docs for the exempt repo-root `.git`).
+    pub skipped_git_metadata: u32,
+    /// Untrusted mode only: symlinks, never followed.
+    pub skipped_symlink: u32,
     /// Files that were NOT valid UTF-8 and were decoded lossily (invalid
     /// sequences replaced with U+FFFD) rather than skipped.
     pub decoded_lossily: u32,
     /// Per-path skip report. Always carries `PossibleSecret` and `Binary`
-    /// entries (the binary manifest); carries `TooLarge` / `Unreadable`
-    /// entries only in untrusted mode. Capped at `SKIP_LIST_CAP` per
+    /// entries (the binary manifest); carries `TooLarge` / `Unreadable` /
+    /// `GitMetadata` / `Symlink` entries only in untrusted mode. Capped at `SKIP_LIST_CAP` per
     /// `ListClass`.
     pub skipped_files: Vec<SkippedFile>,
     /// Entries in `skipped_files` per `ListClass`, for the per-class cap.
@@ -182,6 +197,8 @@ impl GatherStats {
         self.skipped_binary += from.skipped_binary;
         self.skipped_io_error += from.skipped_io_error;
         self.skipped_secret += from.skipped_secret;
+        self.skipped_git_metadata += from.skipped_git_metadata;
+        self.skipped_symlink += from.skipped_symlink;
         self.decoded_lossily += from.decoded_lossily;
         for sample in &from.io_error_samples {
             if self.io_error_samples.len() < IO_ERROR_SAMPLE_CAP {
@@ -209,6 +226,18 @@ impl GatherStats {
             || self.skipped_binary > 0
             || self.skipped_io_error > 0
             || self.skipped_secret > 0
+            || self.skipped_git_metadata > 0
+            || self.skipped_symlink > 0
+    }
+
+    /// Every skipped entry, whether or not it made the capped list.
+    pub(crate) fn skipped_total(&self) -> u32 {
+        self.skipped_too_large
+            + self.skipped_binary
+            + self.skipped_io_error
+            + self.skipped_secret
+            + self.skipped_git_metadata
+            + self.skipped_symlink
     }
 
     /// Binary entries in `skipped_files` (the binary manifest).
@@ -222,7 +251,7 @@ impl GatherStats {
 /// Buckets for the per-class `SKIP_LIST_CAP`.
 #[derive(Clone, Copy)]
 enum ListClass {
-    /// Secrets, oversize and unreadable files.
+    /// Secrets, oversize and unreadable files, `.git` entries, symlinks.
     Other,
     /// Binaries with no executable or archive signature.
     DataBinary,
@@ -280,6 +309,13 @@ pub(crate) enum SkipReason {
     Unreadable { error: String },
     /// Matched the secret denylist; content was never read.
     PossibleSecret,
+    /// A `.git` directory or gitfile pruned from the walk (untrusted mode
+    /// only). Never read: its hooks and config can run code on git
+    /// commands, and it can hold code other files load.
+    GitMetadata,
+    /// A symlink, never followed (untrusted mode only). `target` is the
+    /// sanitized link target as stored, which may point outside the subject.
+    Symlink { target: String },
 }
 
 impl std::fmt::Display for SkipReason {
@@ -307,6 +343,10 @@ impl std::fmt::Display for SkipReason {
             }
             SkipReason::Unreadable { error } => write!(f, "unreadable: {error}"),
             SkipReason::PossibleSecret => f.write_str("withheld: possible secret"),
+            SkipReason::GitMetadata => {
+                f.write_str("git metadata, not read: hooks and config can run code on git commands")
+            }
+            SkipReason::Symlink { target } => write!(f, "symlink to {target}, not followed"),
         }
     }
 }
@@ -448,8 +488,27 @@ fn gather_inner(
     builder.standard_filters(!opts.untrusted).hidden(false);
     // Never descend into `.git/` (or read a submodule's `.git` file):
     // object storage is noise, and `.git/config` can carry credentials in
-    // remote URLs. Depth 0 is the walk root itself, always kept.
-    builder.filter_entry(|e| e.depth() == 0 || e.file_name() != ".git");
+    // remote URLs. Depth 0 is the walk root itself, always kept. In
+    // untrusted mode each pruned entry is remembered so it can be listed:
+    // a `.git` the subject ships can carry hooks or hide loaded code. The
+    // one exemption is a repo subject's own top-level `.git`, which every
+    // clone has.
+    let pruned_git: std::sync::Arc<std::sync::Mutex<Vec<std::path::PathBuf>>> = Default::default();
+    let record_git = opts.untrusted;
+    let exempt_root_git = matches!(subject, Subject::Repo(_));
+    let pruned = pruned_git.clone();
+    builder.filter_entry(move |e| {
+        if e.depth() == 0 || e.file_name() != ".git" {
+            return true;
+        }
+        if record_git
+            && !(exempt_root_git && e.depth() == 1)
+            && let Ok(mut v) = pruned.lock()
+        {
+            v.push(e.path().to_path_buf());
+        }
+        false
+    });
 
     for entry in builder.build() {
         let entry = match entry {
@@ -464,6 +523,20 @@ fn gather_inner(
                 continue;
             }
         };
+        if opts.untrusted && entry.depth() > 0 && entry.path_is_symlink() {
+            let abs = entry.path();
+            if let Ok(rel) = abs.strip_prefix(root) {
+                let rel_str = normalize(rel);
+                if scope.matches(&rel_str) {
+                    let target = std::fs::read_link(abs)
+                        .map(|t| sanitize_label(&t.to_string_lossy()))
+                        .unwrap_or_else(|_| "<unreadable>".to_string());
+                    stats.skipped_symlink += 1;
+                    stats.record_skip(sanitize_label(&rel_str), SkipReason::Symlink { target });
+                }
+            }
+            continue;
+        }
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
@@ -524,6 +597,15 @@ fn gather_inner(
                 }
                 record_io_error(&mut stats, format!("{label}: {msg}"));
             }
+        }
+    }
+
+    let mut pruned_git = std::mem::take(&mut *pruned_git.lock().unwrap_or_else(|e| e.into_inner()));
+    pruned_git.sort();
+    for abs in pruned_git {
+        if let Ok(rel) = abs.strip_prefix(root) {
+            stats.skipped_git_metadata += 1;
+            stats.record_skip(sanitize_label(&normalize(rel)), SkipReason::GitMetadata);
         }
     }
 
@@ -1511,6 +1593,115 @@ mod tests {
         );
         assert!(p.contains(&".gitignore".to_string()), "got: {p:?}");
         assert!(!p.iter().any(|x| x.starts_with(".git/")), "got: {p:?}");
+    }
+
+    fn skips_with(res: &GatherResult, want: fn(&SkipReason) -> bool) -> Vec<String> {
+        let mut v: Vec<String> = res
+            .stats
+            .skipped_files
+            .iter()
+            .filter(|s| want(&s.reason))
+            .map(|s| s.path.clone())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn untrusted_mode_lists_pruned_git_entries() {
+        let tmp = tempdir().unwrap();
+        write(&tmp.path().join("index.js"), "require('./lib/.git/x')\n");
+        write(
+            &tmp.path().join(".git/hooks/post-checkout"),
+            "#!/bin/sh\nevil\n",
+        );
+        write(&tmp.path().join("lib/.git/x.js"), "payload()\n");
+        write(&tmp.path().join("sub/.git"), "gitdir: ../elsewhere\n");
+        let is_git = |r: &SkipReason| matches!(r, SkipReason::GitMetadata);
+
+        // A plain directory subject: every `.git`, top-level included.
+        let file_subject = Subject::File(crate::subject::file::File {
+            root: tmp.path().to_path_buf(),
+        });
+        let untrusted = parse_spec(OPEN_SCOPE_UNTRUSTED);
+        let res = gather(&file_subject, &untrusted, &[]).unwrap();
+        let p = paths(&res);
+        assert!(!p.iter().any(|x| x.contains(".git")), "got: {p:?}");
+        assert_eq!(
+            skips_with(&res, is_git),
+            vec![".git", "lib/.git", "sub/.git"]
+        );
+        assert_eq!(res.stats.skipped_git_metadata, 3);
+        assert!(res.stats.coverage_partial());
+
+        // A repo subject: its own top-level `.git` is exempt, nested ones aren't.
+        let res = gather(&make_subject(tmp.path()), &untrusted, &[]).unwrap();
+        assert_eq!(skips_with(&res, is_git), vec!["lib/.git", "sub/.git"]);
+
+        // Trusted mode keeps pruning quietly.
+        let res = gather(&file_subject, &parse_spec(OPEN_SCOPE_TRUSTED), &[]).unwrap();
+        assert!(skips_with(&res, is_git).is_empty());
+        assert_eq!(res.stats.skipped_git_metadata, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn untrusted_mode_lists_symlinks_without_following() {
+        let tmp = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        write(&outside.path().join("secret.txt"), "outside-content\n");
+        write(&tmp.path().join("package.json"), "{}\n");
+        std::fs::create_dir_all(tmp.path().join("scripts")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            tmp.path().join("scripts/setup.js"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("linked-dir")).unwrap();
+        let is_link = |r: &SkipReason| matches!(r, SkipReason::Symlink { .. });
+
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_UNTRUSTED),
+            &[],
+        )
+        .unwrap();
+        assert!(
+            res.chunks[0]
+                .files
+                .iter()
+                .all(|f| !f.content.contains("outside-content")),
+            "symlink was followed"
+        );
+        assert_eq!(
+            skips_with(&res, is_link),
+            vec!["linked-dir", "scripts/setup.js"]
+        );
+        assert_eq!(res.stats.skipped_symlink, 2);
+        let setup = res
+            .stats
+            .skipped_files
+            .iter()
+            .find(|s| s.path == "scripts/setup.js")
+            .unwrap();
+        let target = outside.path().join("secret.txt");
+        assert_eq!(
+            setup.reason,
+            SkipReason::Symlink {
+                target: sanitize_label(&target.to_string_lossy())
+            }
+        );
+        let json = serde_json::to_value(setup).unwrap();
+        assert_eq!(json["reason"], "symlink");
+
+        let res = gather(
+            &make_subject(tmp.path()),
+            &parse_spec(OPEN_SCOPE_TRUSTED),
+            &[],
+        )
+        .unwrap();
+        assert!(skips_with(&res, is_link).is_empty());
+        assert_eq!(res.stats.skipped_symlink, 0);
     }
 
     #[test]
