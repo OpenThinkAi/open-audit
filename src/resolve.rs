@@ -13,10 +13,11 @@
 //! Untrusted subjects don't get to pick their own auditor. Trust is decided
 //! for the whole run, matching `GatherOptions::for_specs`: if any spec in
 //! `--against` is untrusted (an `untrusted/*` token or an ad-hoc file that
-//! declares `mode: untrusted`) and cwd is inside the subject, every
-//! repo-local override is ignored in favour of the built-in, `trusted/*`
-//! ones included. A local catalog spec must also declare the same `mode:`
-//! as its catalog path, so `untrusted/x.md` can't quietly run as trusted.
+//! declares `mode: untrusted`) and cwd is inside the subject or the subject
+//! is inside cwd, every repo-local override is ignored in favour of the
+//! built-in, `trusted/*` ones included. A local catalog spec must also
+//! declare the same `mode:` as its catalog path, so `untrusted/x.md` can't
+//! quietly run as trusted.
 
 use crate::builtins;
 use crate::spec::{self, Mode, Spec, SpecSource};
@@ -49,7 +50,10 @@ pub(crate) fn resolve(against: &str, repo_root: &Path) -> Result<Vec<Spec>> {
 
 /// Like `resolve`, but aware of the subject being audited. If `repo_root`
 /// (the cwd whose `.oaudit/` we'd read) lies inside `subject_root`, the
-/// subject itself is supplying the local catalog. In that case, when the
+/// subject itself is supplying the local catalog. If `subject_root` lies
+/// inside `repo_root`, the catalog comes from the tree enclosing the
+/// subject (`cd hostile-clone && oaudit file .claude/skills/foo`), which
+/// is just as untrusted. In either case, when the
 /// run is untrusted (any spec in it is untrusted), every token skips the
 /// local override and uses the built-in: one untrusted spec makes the whole
 /// gather untrusted, so a `trusted/*` override from the subject would let
@@ -67,8 +71,9 @@ pub(crate) fn resolve_for_subject(
     if tokens.is_empty() {
         bail!("--against requires at least one spec");
     }
-    let subject_owns_catalog = subject_root.is_some_and(|s| is_within(repo_root, s));
-    let ignore_local = subject_owns_catalog && run_is_untrusted(&tokens)?;
+    let catalog_tied_to_subject =
+        subject_root.is_some_and(|s| is_within(repo_root, s) || is_within(s, repo_root));
+    let ignore_local = catalog_tied_to_subject && run_is_untrusted(&tokens)?;
     tokens
         .iter()
         .map(|token| resolve_token(token, repo_root, ignore_local))
@@ -190,7 +195,9 @@ fn locate(token: &str, repo_root: &Path, ignore_local: bool) -> Result<Located> 
                     return Ok(Located::Local(local));
                 }
                 eprintln!(
-                    "oaudit: ignoring {} — the subject can't supply its own auditor in an untrusted run; using the built-in",
+                    "oaudit: ignoring {} — a .oaudit/ that contains or belongs to the subject can't \
+                     supply an untrusted run's auditor; using the built-in (pass the spec as a file \
+                     path to use it)",
                     local.display()
                 );
             }
@@ -199,8 +206,9 @@ fn locate(token: &str, repo_root: &Path, ignore_local: bool) -> Result<Located> 
             }
             if has_local {
                 bail!(
-                    "spec `{token}` exists only in the subject's own .oaudit/, which is ignored in an \
-                     untrusted run.\n  Run oaudit from outside the subject to use it, or pick a built-in:\n{}",
+                    "spec `{token}` exists only in a .oaudit/ that contains or belongs to the subject, \
+                     which is ignored in an untrusted run.\n  Run oaudit from a directory unrelated to the \
+                     subject, pass the spec as a file path, or pick a built-in:\n{}",
                     builtins_index(),
                 );
             }
@@ -377,6 +385,33 @@ mod tests {
         let other = tempdir().unwrap();
         let specs =
             resolve_for_subject("untrusted/security", tmp.path(), Some(other.path())).unwrap();
+        assert!(matches!(specs[0].source, SpecSource::Local(_)));
+    }
+
+    #[test]
+    fn enclosing_tree_cannot_supply_a_nested_subjects_untrusted_auditor() {
+        // cwd is a hostile checkout; the subject is a directory inside it.
+        let tmp = tempdir().unwrap();
+        write_local(tmp.path(), "untrusted", "untrusted", "return []");
+        write_local(tmp.path(), "trusted", "trusted", "return []");
+        let subject = tmp.path().join(".claude/skills/foo");
+        std::fs::create_dir_all(&subject).unwrap();
+        let specs = resolve_for_subject(
+            "untrusted/security,trusted/security",
+            tmp.path(),
+            Some(&subject),
+        )
+        .unwrap();
+        for spec in &specs {
+            assert!(
+                matches!(spec.source, SpecSource::Builtin(_)),
+                "{:?}",
+                spec.source
+            );
+            assert!(!spec.body.contains("return []"));
+        }
+        // An all-trusted run of the nested subject keeps the user's override.
+        let specs = resolve_for_subject("trusted/security", tmp.path(), Some(&subject)).unwrap();
         assert!(matches!(specs[0].source, SpecSource::Local(_)));
     }
 

@@ -45,8 +45,9 @@ back within two weeks, follow up on the same report.
   an empty temporary working directory. The model can only read the prompt
   oaudit gives it and return text.
 - **The subject can't choose its own auditor.** When you run oaudit from
-  inside the thing being audited and any spec in the run is untrusted, all
-  of its `.oaudit/auditors/` overrides are ignored, and subject files are
+  inside the thing being audited, or from a directory that contains it, and
+  any spec in the run is untrusted, all `.oaudit/auditors/` overrides in
+  that directory are ignored, and subject files are
   fenced with a random per-run marker so their content can't impersonate
   oaudit's instructions.
 - **Results are LLM judgments, not guarantees.** Findings can be wrong, and
