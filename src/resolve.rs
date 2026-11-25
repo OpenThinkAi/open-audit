@@ -13,10 +13,11 @@
 //! Untrusted subjects don't get to pick their own auditor. Trust is decided
 //! for the whole run, matching `GatherOptions::for_specs`: if any spec in
 //! `--against` is untrusted (an `untrusted/*` token or an ad-hoc file that
-//! declares `mode: untrusted`) and cwd is inside the subject or the
-//! subject is inside cwd, every repo-local override is ignored in favour
-//! of the built-in, `trusted/*` ones included. A local catalog spec must also declare the same `mode:`
-//! as its catalog path, so `untrusted/x.md` can't quietly run as trusted.
+//! declares `mode: untrusted`) and cwd is inside the subject or the subject
+//! is inside cwd, every repo-local override is ignored in favour of the
+//! built-in, `trusted/*` ones included. A local catalog spec must also
+//! declare the same `mode:` as its catalog path, so `untrusted/x.md` can't
+//! quietly run as trusted.
 
 use crate::builtins;
 use crate::spec::{self, Mode, Spec, SpecSource};
@@ -70,9 +71,9 @@ pub(crate) fn resolve_for_subject(
     if tokens.is_empty() {
         bail!("--against requires at least one spec");
     }
-    let subject_owns_catalog =
+    let catalog_tied_to_subject =
         subject_root.is_some_and(|s| is_within(repo_root, s) || is_within(s, repo_root));
-    let ignore_local = subject_owns_catalog && run_is_untrusted(&tokens)?;
+    let ignore_local = catalog_tied_to_subject && run_is_untrusted(&tokens)?;
     tokens
         .iter()
         .map(|token| resolve_token(token, repo_root, ignore_local))
@@ -194,7 +195,9 @@ fn locate(token: &str, repo_root: &Path, ignore_local: bool) -> Result<Located> 
                     return Ok(Located::Local(local));
                 }
                 eprintln!(
-                    "oaudit: ignoring {} — the subject can't supply its own auditor in an untrusted run; using the built-in",
+                    "oaudit: ignoring {} — a .oaudit/ that contains or belongs to the subject can't \
+                     supply an untrusted run's auditor; using the built-in (pass the spec as a file \
+                     path to use it)",
                     local.display()
                 );
             }
